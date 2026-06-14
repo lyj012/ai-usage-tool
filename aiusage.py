@@ -23,6 +23,16 @@ from pathlib import Path
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
+from workreport import (
+    build_daily_report,
+    collect_git_activity,
+    configured_projects,
+    load_config,
+    load_reflection,
+    write_daily_outputs,
+    write_default_config,
+)
+
 try:
     import tiktoken  # type: ignore
 
@@ -943,6 +953,57 @@ def command_merge(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_init_config(args: argparse.Namespace) -> int:
+    path = Path(args.out).expanduser()
+    write_default_config(path, args.project or [])
+    print(f"Wrote config to {path}")
+    return 0
+
+
+def command_export_workday(args: argparse.Namespace) -> int:
+    tz = ZoneInfo(args.timezone)
+    export_day = date.fromisoformat(args.date)
+    start, end = day_bounds(export_day, tz)
+    config_path = Path(args.config).expanduser()
+    config = load_config(config_path)
+    projects = configured_projects(config)
+    config_base = config_path.parent if config_path.parent != Path("") else Path(".")
+    data_dir = Path(str(config.get("data_dir") or "data")).expanduser()
+    if not data_dir.is_absolute():
+        data_dir = config_base / data_dir
+
+    log_progress(args, f"导出 v2 工作日报范围: {start.isoformat()} -> {end.isoformat()}")
+    turns = collect_turns(args, start, end, tz)
+    ai_records = [turn.to_record(tz) for turn in turns]
+    if args.project:
+        allowed_projects = set(args.project)
+        before_count = len(ai_records)
+        ai_records = [r for r in ai_records if r.get("project") in allowed_projects]
+        log_progress(args, f"AI 项目过滤: {before_count} -> {len(ai_records)}")
+
+    commits, file_changes, git_errors = collect_git_activity(projects, start, end)
+    reflection = load_reflection(data_dir, export_day.isoformat())
+    report = build_daily_report(
+        export_day.isoformat(),
+        args.person,
+        ai_records,
+        commits,
+        file_changes,
+        reflection,
+        git_errors,
+    )
+    out_dir = Path(args.out).expanduser()
+    if str(out_dir) == ".":
+        out_dir = data_dir / "reports" / export_day.isoformat()
+    write_daily_outputs(out_dir, report, ai_records, commits, file_changes, report.get("associations") or [])
+    print(f"Exported v2 work report to {out_dir}")
+    if git_errors:
+        print("Git warnings:")
+        for item in git_errors:
+            print(f"- {item}")
+    return 0
+
+
 def add_common_export_args(parser: argparse.ArgumentParser) -> None:
     home = Path.home()
     default_project_roots = [str(home / "2027")] if (home / "2027").exists() else []
@@ -964,10 +1025,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="aiusage", description="Codex / Claude Code usage exporter")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p_config = sub.add_parser("init-config", help="创建 v2 本地项目配置")
+    p_config.add_argument("--out", default="aiusage-config.json", help="配置文件输出路径")
+    p_config.add_argument("--project", action="append", default=[], help="项目配置，格式 name=path 或 name=path|repo_url，可重复传入")
+    p_config.set_defaults(func=command_init_config)
+
     p_day = sub.add_parser("export-day", help="导出某一天的 inputs.jsonl + summary.md zip")
     add_common_export_args(p_day)
     p_day.add_argument("--date", required=True, help="YYYY-MM-DD")
     p_day.set_defaults(func=command_export)
+
+    p_workday = sub.add_parser("export-workday", help="导出 v2 个人研发工作日报")
+    add_common_export_args(p_workday)
+    p_workday.add_argument("--date", required=True, help="YYYY-MM-DD")
+    p_workday.add_argument("--config", default="aiusage-config.json", help="v2 项目配置文件")
+    p_workday.set_defaults(func=command_export_workday)
 
     p_range = sub.add_parser("export-range", help="导出日期范围，起止日期均包含")
     add_common_export_args(p_range)

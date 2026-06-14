@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -14,6 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from aiusage import aggregate, fmt_seconds, json_dumps, markdown_summary, read_inputs_from_zip_or_file
+from workreport import load_config, load_reflection, render_daily_markdown, save_reflection
 
 
 st.set_page_config(page_title="AI Usage Dashboard", layout="wide")
@@ -207,7 +210,179 @@ def render_download_report(records: list[dict[str, Any]]) -> None:
     st.download_button("下载完整团队报表 zip", zip_data, "team_aiusage_report.zip", mime="application/zip")
 
 
+def resolve_data_dir(config_path: Path, config: dict[str, Any]) -> Path:
+    data_dir = Path(str(config.get("data_dir") or "data")).expanduser()
+    if data_dir.is_absolute():
+        return data_dir
+    return config_path.parent / data_dir
+
+
+def read_daily_report(report_dir: Path) -> dict[str, Any] | None:
+    path = report_dir / "daily-report.json"
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data if isinstance(data, dict) else None
+
+
+def run_workday_export(config_path: Path, person: str, day: str, out_dir: Path) -> tuple[bool, str]:
+    script = Path(__file__).with_name("aiusage.py")
+    cmd = [
+        sys.executable,
+        str(script),
+        "export-workday",
+        "--person",
+        person,
+        "--date",
+        day,
+        "--config",
+        str(config_path),
+        "--out",
+        str(out_dir),
+        "--verbose",
+    ]
+    proc = subprocess.run(
+        cmd,
+        text=True,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    output = "\n".join(x for x in [proc.stdout.strip(), proc.stderr.strip()] if x)
+    return proc.returncode == 0, output
+
+
+def render_reflection_form(data_dir: Path, day: str) -> None:
+    reflection = load_reflection(data_dir, day)
+    with st.form("daily_reflection"):
+        st.subheader("每日人工补充")
+        most_important_goal = st.text_area("今天最重要的目标", value=str(reflection.get("most_important_goal") or ""), height=80)
+        actual_result = st.text_area("今天实际完成的结果", value=str(reflection.get("actual_result") or ""), height=80)
+        biggest_blocker = st.text_area("今天最大的阻塞或问题", value=str(reflection.get("biggest_blocker") or ""), height=80)
+        c1, c2 = st.columns(2)
+        accepted = c1.checkbox("是否完成验收", value=bool(reflection.get("accepted")))
+        has_rework = c2.checkbox("是否发生返工", value=bool(reflection.get("has_rework")))
+        other_work = st.text_area("其他无法从 Git 获取的工作", value=str(reflection.get("other_work") or ""), height=100)
+        submitted = st.form_submit_button("保存复盘")
+    if submitted:
+        save_reflection(
+            data_dir,
+            day,
+            {
+                "most_important_goal": most_important_goal,
+                "actual_result": actual_result,
+                "biggest_blocker": biggest_blocker,
+                "accepted": accepted,
+                "has_rework": has_rework,
+                "other_work": other_work,
+            },
+        )
+        st.success("复盘已保存。重新生成日报后会进入 daily-report。")
+
+
+def render_v2_report(report: dict[str, Any]) -> None:
+    overview = report.get("overview") or {}
+    st.subheader(f"研发日报 {report.get('date')}")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("AI 输入轮数", int(overview.get("ai_turn_count") or 0))
+    c2.metric("AI 会话数", int(overview.get("ai_session_count") or 0))
+    c3.metric("业务提交", int(overview.get("business_commit_count") or 0))
+    c4.metric("修改文件", int(overview.get("files_changed") or 0))
+    c5.metric("新增/删除", f"+{int(overview.get('insertions') or 0)} / -{int(overview.get('deletions') or 0)}")
+
+    tabs = st.tabs(["概览", "Git 工作量", "AI 关联", "返工异常", "技术主题", "日报 Markdown", "原始 JSON"])
+    with tabs[0]:
+        st.dataframe(pd.DataFrame(report.get("project_distribution") or []), use_container_width=True, hide_index=True)
+        st.markdown("#### 今日成果")
+        st.write(report.get("today_outcome") or "-")
+        st.markdown("#### 明日建议")
+        for item in report.get("tomorrow_suggestions") or []:
+            st.write(f"- {item}")
+    with tabs[1]:
+        git_workload = report.get("git_workload") or {}
+        st.dataframe(pd.DataFrame(git_workload.get("commits") or []), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(git_workload.get("file_changes") or []), use_container_width=True, hide_index=True)
+    with tabs[2]:
+        st.dataframe(pd.DataFrame(report.get("associations") or []), use_container_width=True, hide_index=True)
+    with tabs[3]:
+        st.dataframe(pd.DataFrame(report.get("rework_and_exceptions") or []), use_container_width=True, hide_index=True)
+    with tabs[4]:
+        st.dataframe(pd.DataFrame(report.get("technical_topics") or []), use_container_width=True, hide_index=True)
+        quality = report.get("quality_metrics") or {}
+        st.json(quality)
+    with tabs[5]:
+        markdown = render_daily_markdown(report)
+        st.download_button("下载 daily-report.md", markdown.encode("utf-8"), "daily-report.md", mime="text/markdown")
+        st.markdown(markdown)
+    with tabs[6]:
+        st.download_button(
+            "下载 daily-report.json",
+            json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8"),
+            "daily-report.json",
+            mime="application/json",
+        )
+        st.json(report)
+
+
+def render_v2_dashboard() -> None:
+    st.title("AI Usage Tool v2.0")
+    st.caption("本地个人研发工作日报：AI 使用、Git 工作量、人工复盘、返工信号和技术主题。")
+
+    with st.sidebar:
+        st.header("v2 数据")
+        config_text = st.text_input("配置文件", value="aiusage-config.json")
+        person = st.text_input("人员", value="")
+        day_value = st.date_input("日期")
+        day = day_value.isoformat()
+
+    config_path = Path(config_text).expanduser()
+    try:
+        config = load_config(config_path)
+    except Exception as exc:
+        st.error(f"读取配置失败: {exc}")
+        return
+
+    data_dir = resolve_data_dir(config_path, config)
+    report_dir = data_dir / "reports" / day
+    projects = config.get("projects") or []
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        st.markdown("#### 已配置项目")
+        st.dataframe(pd.DataFrame(projects), use_container_width=True, hide_index=True)
+    with c2:
+        st.markdown("#### 报告目录")
+        st.code(str(report_dir))
+
+    render_reflection_form(data_dir, day)
+
+    generate_disabled = not person.strip()
+    if st.button("生成 / 刷新当天日报", disabled=generate_disabled):
+        ok, output = run_workday_export(config_path, person.strip(), day, report_dir)
+        if ok:
+            st.success("日报已生成。")
+        else:
+            st.error("日报生成失败。")
+        if output:
+            st.code(output)
+
+    report = read_daily_report(report_dir)
+    if report is None:
+        st.info("尚未生成当天日报。先保存复盘，再点击生成。")
+        return
+    render_v2_report(report)
+
+
 def main() -> None:
+    with st.sidebar:
+        mode = st.radio("视图", ["v2 个人日报", "v1 团队统计"], index=0)
+
+    if mode == "v2 个人日报":
+        render_v2_dashboard()
+        return
+
     st.title("AI Usage Dashboard")
     st.caption("上传每天导出的 ai-usage-*.zip，或填写本地目录，查看团队 AI 使用统计。")
 

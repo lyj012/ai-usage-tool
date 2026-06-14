@@ -2,6 +2,8 @@
 
 一个本地小工具，用来导出和汇总 Codex / Claude Code 的每日使用记录。
 
+v2.0 增加个人研发工作日报能力：在本地汇总 AI 使用记录、指定项目的 Git 工作量、每日人工复盘，并生成 `daily-report.json` 和 `daily-report.md`。
+
 每个人每天只需要交一个 zip，里面只有：
 
 - `inputs.jsonl`：机器统计源，一行代表一轮真实用户输入。
@@ -130,6 +132,65 @@ python3 aiusage.py export-day \
 ```text
 C:\Users\用户名\Desktop\ai-usage-zac-2026-06-09.zip
 ```
+
+## v2.0 个人研发日报
+
+第一步，创建本地项目配置：
+
+```powershell
+git clone https://github.com/lyj012/ai-usage-tool.git C:\Users\lenovo\Desktop\ai-usage-tool
+
+python .\aiusage.py init-config `
+  --out .\aiusage-config.json `
+  --project "ai-usage-tool=C:\Users\lenovo\Desktop\ai-usage-tool|https://github.com/lyj012/ai-usage-tool"
+```
+
+配置文件示例：
+
+```json
+{
+  "projects": [
+    {
+      "name": "ai-usage-tool",
+      "path": "C:\\Users\\lenovo\\Desktop\\ai-usage-tool",
+      "repo_url": "https://github.com/lyj012/ai-usage-tool"
+    }
+  ],
+  "data_dir": "data"
+}
+```
+
+`repo_url` 只用于记录来源和报告展示，Git 工作量采集读取的是 `path` 指向的本地 Git 仓库。只填写 GitHub URL、没有本地 clone 时，无法统计当天本机提交和文件变更。
+
+第二步，生成某天日报：
+
+```powershell
+python .\aiusage.py export-workday `
+  --person zac `
+  --date 2026-06-14 `
+  --config .\aiusage-config.json `
+  --verbose
+```
+
+默认输出到：
+
+```text
+data/
+  reflections/
+    2026-06-14.json
+  reports/
+    2026-06-14/
+      ai-inputs.jsonl
+      git-commits.jsonl
+      git-file-changes.jsonl
+      associations.jsonl
+      daily-report.json
+      daily-report.md
+```
+
+也可以在看板中打开 `v2 个人日报` 视图，填写当天人工复盘后点击生成日报。
+
+v2.0 当前不调用 OpenAI API，不接入 MCP，不上传云端。AI 会话与 Git 提交的关联、返工识别、工作质量指标均为本地规则估算，报告中会保留依据和置信度。
 
 默认扫描：
 
