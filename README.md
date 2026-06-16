@@ -33,31 +33,40 @@ aiusage-tool/
   app.py
   requirements.txt
   README.md
-  run_export_today.bat
+  run_workday_report.bat
   run_dashboard.bat
   run_export_today.command
   run_dashboard.command
 ```
 
-普通 Windows 用户每天只需要双击：
+普通 Windows 用户生成 v2.0 个人研发日报，每天只需要双击：
 
 ```text
-run_export_today.bat
+run_workday_report.bat
 ```
 
-macOS 用户每天双击：
+脚本会在项目目录下生成：
+
+```text
+data\reports\YYYY-MM-DD\daily-report.md
+data\reports\YYYY-MM-DD\daily-report.json
+```
+
+这是 v2.0 个人研发日报，不是旧版 AI 使用 zip。
+
+macOS 旧版 v1 zip 导出脚本仍可双击：
 
 ```text
 run_export_today.command
 ```
 
-脚本会在桌面生成：
+它会在桌面生成：
 
 ```text
 ai-usage-用户名-YYYY-MM-DD.zip
 ```
 
-然后把这个 zip 发给你。
+这个 zip 是旧版 AI 使用统计，不是 v2 研发日报。
 
 双击导出时终端会显示进度，例如：
 
@@ -84,6 +93,12 @@ macOS:   run_dashboard.command
 
 打开网页后上传所有人的 `ai-usage-*.zip`，即可查看总览、按天、按人、按项目、会话摘要、高 token 轮次、长任务轮次，并下载团队报表。
 
+## 我应该点哪个文件
+
+- `run_workday_report.bat`：生成 v2.0 个人研发日报，输出 `data\reports\YYYY-MM-DD\daily-report.md` 和 `daily-report.json`。这是“个人研发工作分析版”的日常入口。
+- `run_dashboard.bat`：打开网页看板，默认进入 `v2 个人日报`，也可以切换到旧版团队 AI 使用统计。
+- `run_export_today.command`：macOS 旧版 v1 AI 使用 zip 导出，只生成 `ai-usage-用户名-YYYY-MM-DD.zip`，不是 v2 研发日报。
+
 如果 macOS 提示无法打开 `.command`，执行一次：
 
 ```bash
@@ -102,7 +117,7 @@ Windows PowerShell：
 
 ```powershell
 $env:AIUSAGE_PERSON = "zac"
-.\run_export_today.bat
+.\run_workday_report.bat
 ```
 
 ## 个人每日导出

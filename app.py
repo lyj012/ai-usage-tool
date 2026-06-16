@@ -217,6 +217,32 @@ def resolve_data_dir(config_path: Path, config: dict[str, Any]) -> Path:
     return config_path.parent / data_dir
 
 
+def resolve_config_path(config_text: str) -> Path:
+    path = Path(config_text.strip() or "aiusage-config.json").expanduser()
+    if path.is_absolute():
+        return path
+    return Path(__file__).resolve().parent / path
+
+
+def project_config_warnings(projects: list[Any]) -> list[str]:
+    warnings = []
+    for raw in projects:
+        if not isinstance(raw, dict):
+            warnings.append(f"项目配置格式错误: {raw}")
+            continue
+        name = str(raw.get("name") or "").strip() or "未命名项目"
+        path_text = str(raw.get("path") or "").strip()
+        if not path_text:
+            warnings.append(f"{name}: 缺少本地 path，Git 采集不会使用 repo_url。")
+            continue
+        path = Path(path_text).expanduser()
+        if not path.exists():
+            warnings.append(f"{name}: 本地路径不存在: {path}")
+        elif not (path / ".git").exists():
+            warnings.append(f"{name}: path 不是 Git 仓库目录: {path}")
+    return warnings
+
+
 def read_daily_report(report_dir: Path) -> dict[str, Any] | None:
     path = report_dir / "daily-report.json"
     if not path.exists():
@@ -337,7 +363,17 @@ def render_v2_dashboard() -> None:
         day_value = st.date_input("日期")
         day = day_value.isoformat()
 
-    config_path = Path(config_text).expanduser()
+    config_path = resolve_config_path(config_text)
+    if not config_path.exists():
+        st.error("未找到 v2 配置文件，不能生成研发日报。")
+        st.write("请先创建 `aiusage-config.json`，并确认当前打开的是 ai-usage-tool 仓库目录。")
+        st.code(f"当前运行目录: {Path.cwd()}\n配置文件路径: {config_path}")
+        st.code(
+            'python .\\aiusage.py init-config --out .\\aiusage-config.json --project "ai-usage-tool=C:\\Users\\lenovo\\Desktop\\ai-usage-tool|https://github.com/lyj012/ai-usage-tool"',
+            language="powershell",
+        )
+        return
+
     try:
         config = load_config(config_path)
     except Exception as exc:
@@ -347,6 +383,7 @@ def render_v2_dashboard() -> None:
     data_dir = resolve_data_dir(config_path, config)
     report_dir = data_dir / "reports" / day
     projects = config.get("projects") or []
+    warnings = project_config_warnings(projects)
 
     c1, c2 = st.columns([2, 1])
     with c1:
@@ -355,6 +392,12 @@ def render_v2_dashboard() -> None:
     with c2:
         st.markdown("#### 报告目录")
         st.code(str(report_dir))
+
+    if not projects:
+        st.warning("配置文件里没有 projects。请先配置本地 Git 仓库 path，否则 Git 工作量会是 0。")
+        return
+    for warning in warnings:
+        st.warning(warning)
 
     render_reflection_form(data_dir, day)
 

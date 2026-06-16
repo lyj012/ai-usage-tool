@@ -240,6 +240,8 @@ def collect_git_activity(projects: list[ProjectConfig], start: datetime, end: da
 def classify_path(path_text: str) -> str:
     path = path_text.lower()
     suffix = Path(path).suffix
+    if "test" in path or "spec" in path:
+        return "test"
     if suffix == ".sql":
         return "sql"
     if suffix in {".md", ".txt", ".rst", ".docx"}:
@@ -250,8 +252,6 @@ def classify_path(path_text: str) -> str:
         return "backend"
     if suffix in {".yml", ".yaml", ".json", ".toml", ".ini", ".env", ".properties", ".xml"}:
         return "config"
-    if "test" in path or "spec" in path:
-        return "test"
     return "other"
 
 
