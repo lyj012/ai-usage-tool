@@ -200,7 +200,7 @@ python .\aiusage.py export-workday --person lenovo --date 2026-06-15 --config .\
 ```text
 状态：DONE
 完成日期：2026-06-17
-提交：待提交（用户确认后生成 commit hash）
+提交：801c6a9 feat: add v2.1 reports and validation
 验证：python -m py_compile aiusage.py app.py workreport.py
 验证：python .\aiusage.py export-workday --person lenovo --date 2026-06-15 --config .\aiusage-config.json --verbose
 验证：python .\aiusage.py export-workday --person lenovo --date 2026-06-17 --config .\aiusage-config.json --verbose
@@ -244,7 +244,7 @@ python .\aiusage.py export-workday --person lenovo --date 2026-06-15 --config .\
 ```text
 状态：DONE
 完成日期：2026-06-17
-提交：待提交（用户确认后生成 commit hash）
+提交：801c6a9 feat: add v2.1 reports and validation
 验证：python -m py_compile aiusage.py app.py workreport.py
 验证：python .\aiusage.py export-workday --person lenovo --date 2026-06-15 --config .\aiusage-config.json --verbose
 验证：python .\aiusage.py export-workday --person lenovo --date 2026-06-17 --config .\aiusage-config.json --verbose
@@ -283,7 +283,7 @@ python .\aiusage.py export-workday --person lenovo --date 2026-06-15 --config .\
 ```text
 状态：DONE
 完成日期：2026-06-17
-提交：待提交（用户确认后生成 commit hash）
+提交：801c6a9 feat: add v2.1 reports and validation
 验证：python -m py_compile aiusage.py app.py workreport.py tests\test_workreport.py
 验证：python -m unittest discover -s tests
 验证：python .\aiusage.py export-workday --person lenovo --date 2026-06-15 --config .\aiusage-config.json --verbose
@@ -322,7 +322,7 @@ python .\aiusage.py export-workday --person lenovo --date 2026-06-15 --config .\
 ```text
 状态：DONE
 完成日期：2026-06-17
-提交：待提交（用户确认后生成 commit hash）
+提交：801c6a9 feat: add v2.1 reports and validation
 验证：python .\aiusage.py topic-trends --from 2026-06-15 --to 2026-06-17 --config .\aiusage-config.json
 验证：检查 data\reports\2026-06-15_2026-06-17\topic-trends.json，包含 topic_trends、repeated、worth_learning、warnings。
 备注：基于已有 daily-report.json 聚合，不重新扫描原始 AI/Git；缺失日报会进入 warnings。提交后需回填实际 commit hash。
@@ -362,7 +362,7 @@ show-report --date YYYY-MM-DD
 ```text
 状态：DONE
 完成日期：2026-06-17
-提交：待提交（用户确认后生成 commit hash）
+提交：801c6a9 feat: add v2.1 reports and validation
 验证：python .\aiusage.py list-reports --config .\aiusage-config.json
 验证：python .\aiusage.py show-report --date 2026-06-15 --config .\aiusage-config.json
 备注：新增历史日报列出、单日报读取、日期范围读取函数；缺失文件和损坏 JSON 返回 warning。提交后需回填实际 commit hash。
@@ -404,7 +404,7 @@ export-week --person lenovo --week 2026-W25 --config .\aiusage-config.json
 ```text
 状态：DONE
 完成日期：2026-06-17
-提交：待提交（用户确认后生成 commit hash）
+提交：801c6a9 feat: add v2.1 reports and validation
 验证：python .\aiusage.py export-week --person lenovo --week 2026-W25 --config .\aiusage-config.json
 验证：检查 data\reports\2026-W25\weekly-report.json 和 weekly-report.md，包含 overview、project_distribution、topic_trends、rework_trends、warnings。
 备注：周报只读取日报；缺失日期保留 warning，不中断输出。提交后需回填实际 commit hash。
@@ -438,7 +438,7 @@ export-week --person lenovo --week 2026-W25 --config .\aiusage-config.json
 ```text
 状态：DONE
 完成日期：2026-06-17
-提交：待提交（用户确认后生成 commit hash）
+提交：801c6a9 feat: add v2.1 reports and validation
 验证：python .\aiusage.py export-month --person lenovo --month 2026-06 --config .\aiusage-config.json
 验证：检查 data\reports\2026-06\monthly-report.json 和 monthly-report.md，包含项目、主题、返工、工作节奏趋势。
 备注：月报只读取日报；当前月份缺失日期较多，会明确写入 warnings。提交后需回填实际 commit hash。
@@ -479,7 +479,7 @@ export-week --person lenovo --week 2026-W25 --config .\aiusage-config.json
 ```text
 状态：DONE
 完成日期：2026-06-17
-提交：待提交（用户确认后生成 commit hash）
+提交：801c6a9 feat: add v2.1 reports and validation
 验证：Streamlit 看板 http://localhost:8504 打开成功，v2 页面显示历史趋势、日期范围、日报列表、项目趋势、技术主题、返工趋势和趋势 Markdown，console error 为 0。
 验证：修复 Streamlit “Missing Submit Button” 警告，复盘保存按钮可显示。
 备注：历史趋势复用 workreport.py 聚合函数；无历史数据和缺失日期均有明确提示。提交后需回填实际 commit hash。
@@ -529,7 +529,7 @@ python -m unittest
 ```text
 状态：DONE
 完成日期：2026-06-17
-提交：待提交（用户确认后生成 commit hash）
+提交：801c6a9 feat: add v2.1 reports and validation
 验证：python -m py_compile aiusage.py app.py workreport.py tests\test_workreport.py
 验证：python -m unittest discover -s tests
 验证：python .\aiusage.py export-workday --person lenovo --date 2026-06-15 --config .\aiusage-config.json --verbose
