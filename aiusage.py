@@ -24,13 +24,22 @@ from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
 from workreport import (
+    aggregate_topic_trends,
     build_daily_report,
+    build_period_report,
     collect_git_activity,
     configured_projects,
+    iso_week_bounds,
+    list_daily_report_dates,
     load_config,
+    load_daily_report,
+    load_daily_reports_range,
     load_reflection,
+    month_bounds,
+    reports_root,
     write_daily_outputs,
     write_default_config,
+    write_period_outputs,
 )
 
 try:
@@ -1004,6 +1013,100 @@ def command_export_workday(args: argparse.Namespace) -> int:
     return 0
 
 
+def resolve_report_data_dir(config_path: Path, config: dict[str, Any]) -> Path:
+    config_base = config_path.parent if config_path.parent != Path("") else Path(".")
+    data_dir = Path(str(config.get("data_dir") or "data")).expanduser()
+    if not data_dir.is_absolute():
+        data_dir = config_base / data_dir
+    return data_dir
+
+
+def command_list_reports(args: argparse.Namespace) -> int:
+    config_path = Path(args.config).expanduser()
+    config = load_config(config_path)
+    data_dir = resolve_report_data_dir(config_path, config)
+    dates, warnings = list_daily_report_dates(data_dir)
+    result = {"data_dir": str(data_dir), "dates": dates, "warnings": warnings}
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_report(args: argparse.Namespace) -> int:
+    config_path = Path(args.config).expanduser()
+    config = load_config(config_path)
+    data_dir = resolve_report_data_dir(config_path, config)
+    report, warnings = load_daily_report(data_dir, args.date)
+    if report is None:
+        print(json.dumps({"date": args.date, "warnings": warnings}, ensure_ascii=False, indent=2))
+        return 1
+    print(json.dumps({"report": report, "warnings": warnings}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_topic_trends(args: argparse.Namespace) -> int:
+    config_path = Path(args.config).expanduser()
+    config = load_config(config_path)
+    data_dir = resolve_report_data_dir(config_path, config)
+    reports, warnings = load_daily_reports_range(data_dir, args.from_date, args.to_date)
+    trends = aggregate_topic_trends(reports)
+    result = {
+        "schema_version": "2.1",
+        "date_range": {"from": args.from_date, "to": args.to_date},
+        "topic_trends": trends,
+        "warnings": warnings,
+    }
+    out_dir = Path(args.out).expanduser()
+    if str(out_dir) == ".":
+        out_dir = reports_root(data_dir) / f"{args.from_date}_{args.to_date}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "topic-trends.json"
+    out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"Exported topic trends to {out_path}")
+    if warnings:
+        print("Warnings:")
+        for item in warnings:
+            print(f"- {item}")
+    return 0
+
+
+def command_export_week(args: argparse.Namespace) -> int:
+    config_path = Path(args.config).expanduser()
+    config = load_config(config_path)
+    data_dir = resolve_report_data_dir(config_path, config)
+    start, end = iso_week_bounds(args.week)
+    reports, warnings = load_daily_reports_range(data_dir, start.isoformat(), end.isoformat())
+    report = build_period_report("week", args.week, args.person, reports, warnings)
+    out_dir = Path(args.out).expanduser()
+    if str(out_dir) == ".":
+        out_dir = reports_root(data_dir) / args.week
+    write_period_outputs(out_dir, report, "weekly")
+    print(f"Exported weekly report to {out_dir}")
+    if warnings:
+        print("Warnings:")
+        for item in warnings:
+            print(f"- {item}")
+    return 0
+
+
+def command_export_month(args: argparse.Namespace) -> int:
+    config_path = Path(args.config).expanduser()
+    config = load_config(config_path)
+    data_dir = resolve_report_data_dir(config_path, config)
+    start, end = month_bounds(args.month)
+    reports, warnings = load_daily_reports_range(data_dir, start.isoformat(), end.isoformat())
+    report = build_period_report("month", args.month, args.person, reports, warnings)
+    out_dir = Path(args.out).expanduser()
+    if str(out_dir) == ".":
+        out_dir = reports_root(data_dir) / args.month
+    write_period_outputs(out_dir, report, "monthly")
+    print(f"Exported monthly report to {out_dir}")
+    if warnings:
+        print("Warnings:")
+        for item in warnings:
+            print(f"- {item}")
+    return 0
+
+
 def add_common_export_args(parser: argparse.ArgumentParser) -> None:
     home = Path.home()
     default_project_roots = [str(home / "2027")] if (home / "2027").exists() else []
@@ -1040,6 +1143,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_workday.add_argument("--date", required=True, help="YYYY-MM-DD")
     p_workday.add_argument("--config", default="aiusage-config.json", help="v2 项目配置文件")
     p_workday.set_defaults(func=command_export_workday)
+
+    p_list_reports = sub.add_parser("list-reports", help="列出已生成的 v2 日报日期")
+    p_list_reports.add_argument("--config", default="aiusage-config.json", help="v2 项目配置文件")
+    p_list_reports.set_defaults(func=command_list_reports)
+
+    p_show_report = sub.add_parser("show-report", help="读取指定日期的 v2 日报 JSON")
+    p_show_report.add_argument("--date", required=True, help="YYYY-MM-DD")
+    p_show_report.add_argument("--config", default="aiusage-config.json", help="v2 项目配置文件")
+    p_show_report.set_defaults(func=command_show_report)
+
+    p_topic_trends = sub.add_parser("topic-trends", help="按日期范围导出技术主题趋势")
+    p_topic_trends.add_argument("--from", dest="from_date", required=True, help="YYYY-MM-DD")
+    p_topic_trends.add_argument("--to", dest="to_date", required=True, help="YYYY-MM-DD")
+    p_topic_trends.add_argument("--config", default="aiusage-config.json", help="v2 项目配置文件")
+    p_topic_trends.add_argument("--out", default=".", help="输出目录")
+    p_topic_trends.set_defaults(func=command_topic_trends)
+
+    p_week = sub.add_parser("export-week", help="基于日报导出 v2.1 周报")
+    p_week.add_argument("--person", required=True, help="导出人，例如 lenovo")
+    p_week.add_argument("--week", required=True, help="ISO 周，例如 2026-W25")
+    p_week.add_argument("--config", default="aiusage-config.json", help="v2 项目配置文件")
+    p_week.add_argument("--out", default=".", help="输出目录")
+    p_week.set_defaults(func=command_export_week)
+
+    p_month = sub.add_parser("export-month", help="基于日报导出 v2.1 月报")
+    p_month.add_argument("--person", required=True, help="导出人，例如 lenovo")
+    p_month.add_argument("--month", required=True, help="月份，例如 2026-06")
+    p_month.add_argument("--config", default="aiusage-config.json", help="v2 项目配置文件")
+    p_month.add_argument("--out", default=".", help="输出目录")
+    p_month.set_defaults(func=command_export_month)
 
     p_range = sub.add_parser("export-range", help="导出日期范围，起止日期均包含")
     add_common_export_args(p_range)

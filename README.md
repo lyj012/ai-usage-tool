@@ -207,6 +207,61 @@ data/
 
 v2.0 当前不调用 OpenAI API，不接入 MCP，不上传云端。AI 会话与 Git 提交的关联、返工识别、工作质量指标均为本地规则估算，报告中会保留依据和置信度。
 
+## v2.1 历史趋势、周报和月报
+
+v2.1 基于已经生成的 `data/reports/YYYY-MM-DD/daily-report.json` 做历史读取和趋势分析，不重新扫描原始 AI / Git 数据。
+
+列出已有日报：
+
+```powershell
+python .\aiusage.py list-reports --config .\aiusage-config.json
+```
+
+查看某天日报 JSON：
+
+```powershell
+python .\aiusage.py show-report --date 2026-06-15 --config .\aiusage-config.json
+```
+
+导出技术主题趋势：
+
+```powershell
+python .\aiusage.py topic-trends `
+  --from 2026-06-15 `
+  --to 2026-06-17 `
+  --config .\aiusage-config.json
+```
+
+导出周报：
+
+```powershell
+python .\aiusage.py export-week `
+  --person lenovo `
+  --week 2026-W25 `
+  --config .\aiusage-config.json
+```
+
+导出月报：
+
+```powershell
+python .\aiusage.py export-month `
+  --person lenovo `
+  --month 2026-06 `
+  --config .\aiusage-config.json
+```
+
+默认输出：
+
+```text
+data\reports\YYYY-MM-DD_YYYY-MM-DD\topic-trends.json
+data\reports\YYYY-Www\weekly-report.json
+data\reports\YYYY-Www\weekly-report.md
+data\reports\YYYY-MM\monthly-report.json
+data\reports\YYYY-MM\monthly-report.md
+```
+
+看板的 `v2 个人日报` 页面底部也提供 `历史趋势` 区域，可按日期范围查看日报列表、项目趋势、技术主题和返工趋势。
+
 默认扫描：
 
 - `~/.codex`
