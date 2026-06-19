@@ -1,6 +1,82 @@
 # AI Usage Tool
 
-一个本地个人研发工作分析工具，用来汇总 Codex / Claude Code 使用记录、指定项目的 Git 工作量、每日人工复盘，并生成 `daily-report.json` 和 `daily-report.md`。
+AI Usage Tool 是一个**本地个人研发工作分析工具**，不是普通 token 统计器。它把 Codex / Claude Code 会话、指定项目的 Git 提交、每日人工复盘放在一起，生成可复盘的个人研发日报、趋势、周报和月报。
+
+它解决的问题：
+
+- 今天实际推进了什么研发工作。
+- 哪些 AI 会话和 Git 提交可能有关联。
+- 哪里出现了返工、异常或反复修改信号。
+- 哪些技术主题近期重复出现，值得沉淀。
+- 如何在本地保留数据，不上传云端。
+
+核心输出：
+
+```text
+data/reports/YYYY-MM-DD/
+  daily-report.md      # 人可读研发日报
+  daily-report.json    # 结构化日报
+  ai-inputs.jsonl      # 本地 AI 输入明细，可能包含敏感内容
+  git-commits.jsonl    # Git 提交明细
+  associations.jsonl   # AI-Git 关联结果
+```
+
+数据关系：
+
+```text
+Codex / Claude Code 会话
+  + Git 提交和文件变更
+  + 人工复盘
+  -> daily-report.json / daily-report.md
+  -> 周报、月报、趋势
+  -> 本地 stdio MCP / 实验性 HTTP MCP 只读查询
+```
+
+## 功能状态
+
+| 能力 | 状态 | 说明 |
+|---|---|---|
+| v2 个人研发日报 | 稳定 | 本地生成 `daily-report.json` / `daily-report.md` |
+| 历史趋势、周报、月报 | 可用 | 基于已生成日报聚合，不重新扫描原始记录 |
+| Streamlit Dashboard | 可用 | 本地看板查看日报和趋势 |
+| 本地 stdio MCP | 可用 | 给本机 MCP 客户端读取本地报告 |
+| HTTP MCP | 实验 | 自定义 HTTP JSON-RPC transport，已做本地测试，尚未通过 ChatGPT connector 实测 |
+| ChatGPT Remote MCP | 未完成端到端验证 | 仍需要 HTTPS tunnel 和 ChatGPT connector 真实验证 |
+
+## 隐私和安全提示
+
+- 本工具默认读取和写入本机文件，不调用 OpenAI API，不上传云端。
+- `data/` 可能包含完整 AI 输入、本地路径、commit 信息和工作内容，不要提交到 Git。
+- `aiusage-config.json` 可能包含本地项目路径，不要提交到 Git。
+- Remote HTTP MCP 暴露的是私人研发数据。通过 tunnel 暴露前必须设置强 token。
+- HTTP MCP 会返回脱敏视图，但不等于可以公开暴露服务。
+
+## 快速开始
+
+创建本地配置：
+
+```powershell
+python .\aiusage.py init-config `
+  --out .\aiusage-config.json `
+  --project "ai-usage-tool=C:\Users\lenovo\Desktop\ai-usage-tool|https://github.com/lyj012/ai-usage-tool"
+```
+
+生成某天日报：
+
+```powershell
+python .\aiusage.py export-workday `
+  --person lenovo `
+  --date 2026-06-19 `
+  --config .\aiusage-config.json `
+  --verbose
+```
+
+打开本地看板：
+
+```text
+Windows: run_dashboard.bat
+macOS:   run_dashboard.command
+```
 
 ## 依赖
 
@@ -14,7 +90,11 @@ pip install tiktoken
 
 不安装也能运行，会用字符长度近似估算。
 
-普通导出脚本只需要系统已安装 Python，不会安装看板依赖。看板脚本会自动创建 `.venv` 并安装 `requirements.txt` 中的依赖。
+普通导出脚本只需要系统已安装 Python，不会安装看板依赖。看板脚本会自动创建 `.venv` 并安装 `requirements.txt` 中的看板依赖。也可以用 `pyproject.toml` 的可选依赖安装：
+
+```bash
+pip install -e ".[dashboard,tokens]"
+```
 
 ## 推荐分发方式
 
@@ -228,9 +308,9 @@ python .\mcp_server.py
 
 工具参数里的 `config` 可选，默认读取当前目录下的 `aiusage-config.json`。MCP Server 只读取配置中的 `data_dir` 和 `data/reports/` 下的本地报告；如果指定日期没有日报，会返回结构化错误和 warning。
 
-## ChatGPT Remote MCP 第一版
+## HTTP MCP 实验版
 
-ChatGPT 不能直接连接本地 `stdio` MCP，所以第一版新增 HTTP MCP Server，方便通过 HTTPS tunnel 暴露给 ChatGPT 自定义 MCP connector。
+ChatGPT 不能直接连接本地 `stdio` MCP，所以项目提供了一个实验性 HTTP MCP Server，用于后续通过 HTTPS tunnel 验证 Remote MCP。当前仓库只验证了本地 HTTP JSON-RPC 行为，尚未声明已通过 ChatGPT connector 或 MCP Inspector。
 
 本地启动：
 
@@ -250,15 +330,15 @@ Remote MCP 访问需要 bearer token：
 Authorization: Bearer <local-random-token>
 ```
 
-请求来自 `127.0.0.1` 或 `::1` 且没有 token 时允许访问，方便本地 smoke test；通过 tunnel 访问时必须配置 token。不要把 token 写入代码、README、测试数据或提交记录。
+未配置 `AIUSAGE_MCP_TOKEN` 时，只允许本机无 token 访问，方便本地 smoke test。只要配置了 token，所有 `/mcp` 请求都必须携带正确 bearer token，包括 tunnel 转发后看起来来自 `127.0.0.1` 的请求。不要把 token 写入代码、README、测试数据或提交记录。
 
-ChatGPT 侧需要填写 HTTPS tunnel 的 `/mcp` 地址，例如：
+后续 ChatGPT 侧预计需要填写 HTTPS tunnel 的 `/mcp` 地址，例如：
 
 ```text
 https://<tunnel-host>/mcp
 ```
 
-可使用 Cloudflare Tunnel、ngrok 或其他 HTTPS tunnel 把 `http://127.0.0.1:8765` 暴露出去。当前 Remote MCP 仍然只读：不上传云端、不自动提交 Git、不删除报告、不新增写入型工具、不自动扫描 ChatGPT 聊天记录。
+可使用 Cloudflare Tunnel、ngrok 或其他 HTTPS tunnel 把 `http://127.0.0.1:8765` 暴露出去。当前 HTTP MCP 仍然只读：不上传云端、不自动提交 Git、不删除报告、不新增写入型工具、不自动扫描 ChatGPT 聊天记录。HTTP 响应默认会移除本地路径、完整 AI 输入、邮箱、完整 session ID 和完整 hash 等远程不必要字段。
 
 ## ai-inputs.jsonl 字段
 

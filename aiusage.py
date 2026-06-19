@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -42,6 +43,41 @@ except Exception:  # pragma: no cover - optional dependency
 
 
 ISO_Z = "%Y-%m-%dT%H:%M:%S%z"
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+WEEK_RE = re.compile(r"^\d{4}-W\d{2}$")
+MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
+
+
+def valid_date_arg(value: str) -> str:
+    if not DATE_RE.fullmatch(value):
+        raise argparse.ArgumentTypeError("日期必须是 YYYY-MM-DD")
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("日期无效")
+    return value
+
+
+def valid_week_arg(value: str) -> str:
+    if not WEEK_RE.fullmatch(value):
+        raise argparse.ArgumentTypeError("ISO 周必须是 YYYY-Www，例如 2026-W25")
+    try:
+        year_text, week_text = value.split("-W", 1)
+        date.fromisocalendar(int(year_text), int(week_text), 1)
+    except ValueError:
+        raise argparse.ArgumentTypeError("ISO 周无效")
+    return value
+
+
+def valid_month_arg(value: str) -> str:
+    if not MONTH_RE.fullmatch(value):
+        raise argparse.ArgumentTypeError("月份必须是 YYYY-MM")
+    year_text, month_text = value.split("-", 1)
+    month = int(month_text)
+    if month < 1 or month > 12:
+        raise argparse.ArgumentTypeError("月份无效")
+    int(year_text)
+    return value
 
 
 def log_progress(args: argparse.Namespace, message: str) -> None:
@@ -665,6 +701,8 @@ def command_show_report(args: argparse.Namespace) -> int:
 
 
 def command_topic_trends(args: argparse.Namespace) -> int:
+    if date.fromisoformat(args.from_date) > date.fromisoformat(args.to_date):
+        raise SystemExit("--from 不能晚于 --to")
     config_path = Path(args.config).expanduser()
     config = load_config(config_path)
     data_dir = resolve_report_data_dir(config_path, config)
@@ -756,7 +794,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_workday = sub.add_parser("export-workday", help="导出 v2 个人研发工作日报")
     add_common_export_args(p_workday)
-    p_workday.add_argument("--date", required=True, help="YYYY-MM-DD")
+    p_workday.add_argument("--date", required=True, type=valid_date_arg, help="YYYY-MM-DD")
     p_workday.add_argument("--config", default="aiusage-config.json", help="v2 项目配置文件")
     p_workday.set_defaults(func=command_export_workday)
 
@@ -765,27 +803,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_list_reports.set_defaults(func=command_list_reports)
 
     p_show_report = sub.add_parser("show-report", help="读取指定日期的 v2 日报 JSON")
-    p_show_report.add_argument("--date", required=True, help="YYYY-MM-DD")
+    p_show_report.add_argument("--date", required=True, type=valid_date_arg, help="YYYY-MM-DD")
     p_show_report.add_argument("--config", default="aiusage-config.json", help="v2 项目配置文件")
     p_show_report.set_defaults(func=command_show_report)
 
     p_topic_trends = sub.add_parser("topic-trends", help="按日期范围导出技术主题趋势")
-    p_topic_trends.add_argument("--from", dest="from_date", required=True, help="YYYY-MM-DD")
-    p_topic_trends.add_argument("--to", dest="to_date", required=True, help="YYYY-MM-DD")
+    p_topic_trends.add_argument("--from", dest="from_date", required=True, type=valid_date_arg, help="YYYY-MM-DD")
+    p_topic_trends.add_argument("--to", dest="to_date", required=True, type=valid_date_arg, help="YYYY-MM-DD")
     p_topic_trends.add_argument("--config", default="aiusage-config.json", help="v2 项目配置文件")
     p_topic_trends.add_argument("--out", default=".", help="输出目录")
     p_topic_trends.set_defaults(func=command_topic_trends)
 
     p_week = sub.add_parser("export-week", help="基于日报导出 v2.1 周报")
     p_week.add_argument("--person", required=True, help="导出人，例如 lenovo")
-    p_week.add_argument("--week", required=True, help="ISO 周，例如 2026-W25")
+    p_week.add_argument("--week", required=True, type=valid_week_arg, help="ISO 周，例如 2026-W25")
     p_week.add_argument("--config", default="aiusage-config.json", help="v2 项目配置文件")
     p_week.add_argument("--out", default=".", help="输出目录")
     p_week.set_defaults(func=command_export_week)
 
     p_month = sub.add_parser("export-month", help="基于日报导出 v2.1 月报")
     p_month.add_argument("--person", required=True, help="导出人，例如 lenovo")
-    p_month.add_argument("--month", required=True, help="月份，例如 2026-06")
+    p_month.add_argument("--month", required=True, type=valid_month_arg, help="月份，例如 2026-06")
     p_month.add_argument("--config", default="aiusage-config.json", help="v2 项目配置文件")
     p_month.add_argument("--out", default=".", help="输出目录")
     p_month.set_defaults(func=command_export_month)

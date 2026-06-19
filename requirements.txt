@@ -1,3 +1,5 @@
+# Dashboard dependencies used by run_dashboard.bat / run_dashboard.command.
+# CLI report generation works with the Python standard library; tiktoken is optional.
 streamlit>=1.35
 pandas>=2.0
 tiktoken>=0.7

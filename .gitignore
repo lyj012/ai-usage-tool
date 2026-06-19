@@ -4,3 +4,11 @@ __pycache__/
 .env 
 aiusage-config.json
 data/
+.streamlit/
+*.log
+*.tmp
+*.bak
+*.sqlite
+*.db
+htmlcov/
+.coverage

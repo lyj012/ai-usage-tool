@@ -22,7 +22,7 @@
 完成标记格式：
 
 ```text
-状态：DONE
+状态：DONE / HARDENED
 完成日期：YYYY-MM-DD
 提交：commit hash / commit message
 验证：实际执行过的命令或人工验证说明
@@ -614,11 +614,11 @@ save_technical_asset
 ```text
 状态：DONE
 完成日期：2026-06-19
-提交：待回填 / feat: add HTTP MCP server for ChatGPT remote access
+提交：9867fe8 feat: add HTTP MCP server for ChatGPT remote access；本轮安全加固提交待回填
 验证：python -m py_compile aiusage.py app.py workreport.py mcp_server.py mcp_http_server.py tests\test_workreport.py tests\test_mcp_server.py tests\test_mcp_http_server.py
 验证：python -m unittest discover -s tests
 验证：HTTP smoke test 启动 python .\mcp_http_server.py --host 127.0.0.1 --port 8765，调用 GET /health、POST /mcp initialize、tools/list、tools/call get_daily_work_report，并验证无 token / 错 token / 正确 token 行为。
-备注：新增 mcp_http_server.py，复用 mcp_server.handle_request()、TOOLS、SERVER_NAME、SERVER_VERSION；POST /mcp 和 GET /health 均为 UTF-8 JSON 响应；token 从 AIUSAGE_MCP_TOKEN 读取；localhost 无 token允许访问，错误 token 返回 401。当前未做 OAuth、固定域名、ChatGPT 端真实 connector 验证和生产级 rate limit；通过 tunnel 暴露时必须配置 bearer token。
+备注：新增 mcp_http_server.py，复用 mcp_server.handle_request()、TOOLS、SERVER_NAME、SERVER_VERSION；POST /mcp 和 GET /health 均为 UTF-8 JSON 响应；token 从 AIUSAGE_MCP_TOKEN 读取；已加固为配置 token 后本机和 tunnel 转发请求都必须带正确 bearer token；未配置 token 时仅允许本机 smoke test；Remote HTTP MCP 忽略调用方 config，返回脱敏视图。当前未做 OAuth、固定域名、ChatGPT 端真实 connector 验证、MCP Inspector 验证和生产级 rate limit；不能声明已完整兼容 ChatGPT Remote MCP。
 ```
 
 ## 8. 推荐执行顺序

@@ -159,7 +159,8 @@ Authorization: Bearer <token>
 - token 不写入仓库。
 - token 不写入 README 示例的真实值。
 - token 可通过 `AIUSAGE_MCP_TOKEN` 注入。
-- 未配置 token 时，默认只允许 `127.0.0.1` 访问；如要开放给 tunnel，必须显式设置 token。
+- 未配置 token 时，默认只允许本机访问。
+- 一旦配置 token，所有 `/mcp` 请求都必须带正确 token，包括经 tunnel 转发后看起来来自 `127.0.0.1` 的请求。
 
 验收：
 
@@ -391,19 +392,22 @@ ChatGPT 验证：
 
 ## 13. 第一版实现记录
 
-状态：DONE
+状态：HARDENED / 未完成 ChatGPT 端到端验证
 
 完成日期：2026-06-19
 
 已实现：
 
 - 新增 `mcp_http_server.py`，独立于 `mcp_server.py` 的 stdio transport。
-- `GET /health` 返回服务名、版本、transport、状态和工具数量，不返回日报数据。
-- `POST /mcp` 接收 JSON-RPC 请求并复用 `mcp_server.handle_request()`。
+- `GET /health` 只返回 `status: ok`，不返回版本、工具数量或日报数据。
+- `POST /mcp` 接收 JSON-RPC 请求并复用 `mcp_server.handle_request(remote=True)`。
 - 复用 `TOOLS`、`SERVER_NAME`、`SERVER_VERSION`，没有复制 MCP 工具业务逻辑。
 - 启动参数支持 `--host` 和 `--port`，默认 `127.0.0.1:8765`。
 - bearer token 从 `AIUSAGE_MCP_TOKEN` 读取。
-- localhost / `::1` 无 token 可访问，方便本地 smoke test；错误 token 返回 401。
+- 未配置 token 时，本机无 token 可访问，方便本地 smoke test；配置 token 后，本机和 tunnel 转发请求都必须带正确 bearer token。
+- Remote HTTP MCP 忽略调用方传入的 `config`，只使用服务端 `AIUSAGE_MCP_CONFIG` 或默认 `aiusage-config.json`。
+- Remote HTTP MCP 返回统一脱敏视图，移除本地路径、完整 AI 输入、邮箱、完整 session ID、完整 hash 等远程不必要字段。
+- HTTP 增加请求体大小、Content-Length、未知方法、query path、no-store 和 nosniff 处理。
 - HTTP 响应统一 `application/json; charset=utf-8`。
 - 单元测试覆盖 initialize、tools/list、tools/call get_daily_work_report、缺失日期结构化错误、无 token、错 token、正确 token 和 localhost 无 token。
 - README 已补充 ChatGPT Remote MCP 第一版启动、tunnel、token 和只读边界说明。
@@ -432,12 +436,14 @@ python .\mcp_http_server.py --host 127.0.0.1 --port 8765
 - 错 token 返回 401
 - 正确 token 返回 MCP JSON-RPC 响应
 
-剩余项：
+真实状态和剩余项：
 
 - 真实 HTTPS tunnel 验证。
 - ChatGPT developer mode connector 实测。
+- MCP Inspector 或其他标准 Remote MCP 客户端验证。
 - 如 ChatGPT 对 Remote MCP transport 有更严格协议要求，再按实测结果调整。
 - OAuth、固定域名、rate limit、工具级 allowlist 和访问日志仍属于后续生产化选项。
+- 当前 HTTP server 是本项目的受限 HTTP JSON-RPC transport，不应文档化为“已完整兼容 ChatGPT Remote MCP”。
 
 ## 14. 待确认问题
 

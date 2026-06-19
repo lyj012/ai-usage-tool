@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiusage-tool"
+version = "3.0.0"
+description = "Local personal development work analysis from AI sessions, Git activity, and daily reflections."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dashboard = [
+  "streamlit>=1.35",
+  "pandas>=2.0",
+]
+tokens = [
+  "tiktoken>=0.7",
+]
+dev = []
+
+[project.scripts]
+aiusage = "aiusage:main"

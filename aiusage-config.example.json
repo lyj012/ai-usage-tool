@@ -1,0 +1,10 @@
+{
+  "projects": [
+    {
+      "name": "example-project",
+      "path": "C:\\path\\to\\example-project",
+      "repo_url": "https://github.com/example/example-project"
+    }
+  ],
+  "data_dir": "data"
+}

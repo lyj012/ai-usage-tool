@@ -66,12 +66,17 @@ class McpServerTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_list_tools(self):
-        names = {tool["name"] for tool in mcp_server.list_tools()}
+        tools = mcp_server.list_tools()
+        names = {tool["name"] for tool in tools}
         self.assertIn("get_daily_work_report", names)
         self.assertIn("get_work_trend", names)
         self.assertIn("search_work_records", names)
         self.assertIn("get_git_activity", names)
         self.assertIn("get_ai_session_details", names)
+        self.assertTrue(all(tool["annotations"]["readOnlyHint"] for tool in tools))
+        self.assertTrue(all(tool["annotations"]["openWorldHint"] is False for tool in tools))
+        self.assertTrue(all(tool["inputSchema"]["additionalProperties"] is False for tool in tools))
+        self.assertTrue(all("outputSchema" in tool for tool in tools))
 
     def test_get_daily_report_tool(self):
         result = mcp_server.get_daily_work_report(
@@ -133,6 +138,64 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(result["jsonrpc"], "2.0")
         self.assertEqual(result["id"], 1)
         self.assertIn("tools", result["result"])
+
+    def test_argument_validation(self):
+        bad_date = mcp_server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_daily_work_report",
+                    "arguments": {"date": "2026-99-99", "config": str(self.config)},
+                },
+            }
+        )
+        self.assertEqual(bad_date["error"]["code"], -32602)
+
+        unknown = mcp_server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_daily_work_report",
+                    "arguments": {"date": "2026-06-15", "unexpected": "x"},
+                },
+            }
+        )
+        self.assertEqual(unknown["error"]["code"], -32602)
+
+        bad_range = mcp_server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_work_trend",
+                    "arguments": {"from": "2026-06-20", "to": "2026-06-15", "config": str(self.config)},
+                },
+            }
+        )
+        self.assertEqual(bad_range["error"]["code"], -32602)
+
+        bad_limit = mcp_server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": "search_work_records",
+                    "arguments": {"query": "redis", "limit": 1000, "config": str(self.config)},
+                },
+            }
+        )
+        self.assertEqual(bad_limit["error"]["code"], -32602)
+
+        bad_params = mcp_server.handle_request(
+            {"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": "not-object"}
+        )
+        self.assertEqual(bad_params["error"]["code"], -32602)
 
 
 if __name__ == "__main__":
