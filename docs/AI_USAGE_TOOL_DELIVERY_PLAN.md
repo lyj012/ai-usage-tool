@@ -538,7 +538,7 @@ python -m unittest
 
 ### R10. v3.0 MCP Server
 
-状态：DEFERRED
+状态：DONE
 
 目标：
 
@@ -588,11 +588,13 @@ save_technical_asset
 完成记录：
 
 ```text
-状态：DEFERRED
-完成日期：
-提交：
-验证：
-备注：等待 v2.1 稳定后启动。
+状态：DONE
+完成日期：2026-06-19
+提交：待提交（用户确认后生成 commit hash）
+验证：python -m py_compile aiusage.py app.py workreport.py mcp_server.py tests\test_workreport.py tests\test_mcp_server.py
+验证：python -m unittest discover -s tests
+验证：使用 Python subprocess 通过 stdio JSON-RPC 调用 initialize、tools/list、get_git_activity、get_work_trend、get_daily_work_report 缺失日期错误，均返回结构化 JSON。
+备注：新增零依赖 mcp_server.py；当前只实现只读工具 get_daily_work_report、get_work_trend、search_work_records、get_git_activity、get_ai_session_details；不接入 OpenAI API、不上传云端、不自动提交 Git、不删除报告文件。提交后需回填实际 commit hash。
 ```
 
 ## 8. 推荐执行顺序

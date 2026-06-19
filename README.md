@@ -262,6 +262,28 @@ data\reports\YYYY-MM\monthly-report.md
 
 看板的 `v2 个人日报` 页面底部也提供 `历史趋势` 区域，可按日期范围查看日报列表、项目趋势、技术主题和返工趋势。
 
+## v3.0 本地 MCP Server
+
+v3.0 增加只读 MCP Server，让支持 MCP 的客户端读取本地日报和趋势数据。
+
+启动命令：
+
+```powershell
+python .\mcp_server.py
+```
+
+当前 MCP Server 通过 stdio JSON-RPC 工作，不需要 OpenAI API Key，不上传云端，不自动提交 Git，也不会删除报告文件。
+
+已提供只读工具：
+
+- `get_daily_work_report`：读取指定日期 `daily-report.json`。
+- `get_work_trend`：按日期范围读取日报并返回趋势聚合。
+- `search_work_records`：搜索成果、主题、返工、commit 和 AI-Git 关联。
+- `get_git_activity`：读取指定日期的 Git 工作量明细。
+- `get_ai_session_details`：读取指定日期的 AI 会话摘要、关联和未关联原因。
+
+工具参数里的 `config` 可选，默认读取当前目录下的 `aiusage-config.json`。MCP Server 只读取配置中的 `data_dir` 和 `data/reports/` 下的本地报告；如果指定日期没有日报，会返回结构化错误和 warning。
+
 默认扫描：
 
 - `~/.codex`
