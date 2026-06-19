@@ -1,13 +1,6 @@
 # AI Usage Tool
 
-一个本地小工具，用来导出和汇总 Codex / Claude Code 的每日使用记录。
-
-v2.0 增加个人研发工作日报能力：在本地汇总 AI 使用记录、指定项目的 Git 工作量、每日人工复盘，并生成 `daily-report.json` 和 `daily-report.md`。
-
-每个人每天只需要交一个 zip，里面只有：
-
-- `inputs.jsonl`：机器统计源，一行代表一轮真实用户输入。
-- `summary.md`：当天人工可读汇总。
+一个本地个人研发工作分析工具，用来汇总 Codex / Claude Code 使用记录、指定项目的 Git 工作量、每日人工复盘，并生成 `daily-report.json` 和 `daily-report.md`。
 
 ## 依赖
 
@@ -31,11 +24,11 @@ pip install tiktoken
 aiusage-tool/
   aiusage.py
   app.py
+  mcp_server.py
   requirements.txt
   README.md
   run_workday_report.bat
   run_dashboard.bat
-  run_export_today.command
   run_dashboard.command
 ```
 
@@ -52,21 +45,7 @@ data\reports\YYYY-MM-DD\daily-report.md
 data\reports\YYYY-MM-DD\daily-report.json
 ```
 
-这是 v2.0 个人研发日报，不是旧版 AI 使用 zip。
-
-macOS 旧版 v1 zip 导出脚本仍可双击：
-
-```text
-run_export_today.command
-```
-
-它会在桌面生成：
-
-```text
-ai-usage-用户名-YYYY-MM-DD.zip
-```
-
-这个 zip 是旧版 AI 使用统计，不是 v2 研发日报。
+这是 v2.0+ 个人研发日报。
 
 双击导出时终端会显示进度，例如：
 
@@ -84,68 +63,33 @@ Claude: 50/260 C:\Users\...
 --skip-project-root-scan
 ```
 
-管理者/汇总人双击：
+打开看板双击：
 
 ```text
 Windows: run_dashboard.bat
 macOS:   run_dashboard.command
 ```
 
-打开网页后上传所有人的 `ai-usage-*.zip`，即可查看总览、按天、按人、按项目、会话摘要、高 token 轮次、长任务轮次，并下载团队报表。
+打开网页后默认进入 `v2 个人日报`，可查看当天日报、历史趋势、技术主题和返工趋势。
 
 ## 我应该点哪个文件
 
 - `run_workday_report.bat`：生成 v2.0 个人研发日报，输出 `data\reports\YYYY-MM-DD\daily-report.md` 和 `daily-report.json`。这是“个人研发工作分析版”的日常入口。
-- `run_dashboard.bat`：打开网页看板，默认进入 `v2 个人日报`，也可以切换到旧版团队 AI 使用统计。
-- `run_export_today.command`：macOS 旧版 v1 AI 使用 zip 导出，只生成 `ai-usage-用户名-YYYY-MM-DD.zip`，不是 v2 研发日报。
+- `run_dashboard.bat`：打开网页看板，查看 `v2 个人日报`、历史趋势、技术主题和返工趋势。
 
 如果 macOS 提示无法打开 `.command`，执行一次：
 
 ```bash
-chmod +x run_export_today.command run_dashboard.command
+chmod +x run_dashboard.command
 ```
 
 如果人员名不想用系统用户名，可以这样启动导出：
-
-macOS / Linux：
-
-```bash
-AIUSAGE_PERSON=zac ./run_export_today.command
-```
 
 Windows PowerShell：
 
 ```powershell
 $env:AIUSAGE_PERSON = "zac"
 .\run_workday_report.bat
-```
-
-## 个人每日导出
-
-Windows PowerShell：
-
-```powershell
-python .\aiusage.py export-day `
-  --person zac `
-  --date 2026-06-09 `
-  --out "$env:USERPROFILE\Desktop" `
-  --verbose
-```
-
-macOS / Linux：
-
-```bash
-python3 aiusage.py export-day \
-  --person zac \
-  --date 2026-06-09 \
-  --out ~/Desktop \
-  --verbose
-```
-
-输出示例：
-
-```text
-C:\Users\用户名\Desktop\ai-usage-zac-2026-06-09.zip
 ```
 
 ## v2.0 个人研发日报
@@ -284,123 +228,7 @@ python .\mcp_server.py
 
 工具参数里的 `config` 可选，默认读取当前目录下的 `aiusage-config.json`。MCP Server 只读取配置中的 `data_dir` 和 `data/reports/` 下的本地报告；如果指定日期没有日报，会返回结构化错误和 warning。
 
-默认扫描：
-
-- `~/.codex`
-- `~/.claude`
-- `~/2027` 下项目内的 `.codex`、`.codex-ui-dev`、`.claude`
-
-只导出 Codex：
-
-```bash
-python aiusage.py export-day --person zac --date 2026-06-09 --only codex --out ~/Desktop
-```
-
-只导出 Claude Code：
-
-```bash
-python aiusage.py export-day --person zac --date 2026-06-09 --only claude --out ~/Desktop
-```
-
-导出日期范围：
-
-Windows PowerShell：
-
-```powershell
-python .\aiusage.py export-range `
-  --person zac `
-  --from 2026-06-01 `
-  --to 2026-06-09 `
-  --out "$env:USERPROFILE\Desktop"
-```
-
-macOS / Linux：
-
-```bash
-python3 aiusage.py export-range \
-  --person zac \
-  --from 2026-06-01 \
-  --to 2026-06-09 \
-  --out ~/Desktop
-```
-
-默认不统计 Claude `subagents/` 和 sidechain，避免重复放大数据。确实需要时加：
-
-```bash
---include-subagents
-```
-
-只想快速扫描全局记录、不深扫 `~/2027` 项目目录时：
-
-```bash
---skip-project-root-scan
-```
-
-## 团队汇总
-
-把所有人交上来的 `ai-usage-*.zip` 放到同一个目录，例如：
-
-```text
-C:\Users\用户名\Downloads\aiusage-exports\
-  ai-usage-zac-2026-06-09.zip
-  ai-usage-hxl-2026-06-09.zip
-  ai-usage-chenxiaohu-2026-06-09.zip
-```
-
-执行：
-
-Windows PowerShell：
-
-```powershell
-python .\aiusage.py merge `
-  --input "$env:USERPROFILE\Downloads\aiusage-exports" `
-  --out "$env:USERPROFILE\Desktop\team-aiusage-report"
-```
-
-macOS / Linux：
-
-```bash
-python3 aiusage.py merge \
-  --input ~/Downloads/aiusage-exports \
-  --out ~/Desktop/team-aiusage-report
-```
-
-也可以用网页看板：
-
-```bash
-streamlit run app.py
-```
-
-或者双击：
-
-```text
-Windows: run_dashboard.bat
-macOS:   run_dashboard.command
-```
-
-输出：
-
-```text
-team-aiusage-report/
-  team_inputs.jsonl
-  team_daily_summary.csv
-  team_project_summary.csv
-  team_person_summary.csv
-  summary.md
-```
-
-`summary.md` 包含：
-
-- 总览
-- 输入节奏拆解
-- 按天统计
-- 按工具统计
-- 按项目统计
-- 会话摘要
-- 高 token 轮次
-- 长任务轮次
-
-## inputs.jsonl 字段
+## ai-inputs.jsonl 字段
 
 关键字段：
 
@@ -424,20 +252,20 @@ team-aiusage-report/
 - `duration_source`：`native` 或 `estimated`。
 - `input_text` / `input_preview`：原始输入与摘要。
 
-其中 `input_preview` 是每轮输入的规则摘要。团队 `summary.md` 里的“会话摘要”会把同一会话的多轮输入合并成一条简短摘要，方便快速判断当天每个会话大概在做什么。
+其中 `input_preview` 是每轮输入的规则摘要。v2 日报会基于这些明细生成 AI 使用、AI-Git 关联、返工信号和技术主题分析。
 
 ## 关于 AI 摘要
 
-当前版本默认不调用外部 AI，原因是每日导出要足够简单、稳定，不要求每个人配置 API Key。
+当前版本默认不调用外部 AI，原因是本地日报要足够简单、稳定，不要求配置 API Key。
 
-如果后续要引入 AI 梳理，建议基于 `team_inputs.jsonl` 再做一个独立步骤：
+如果后续要引入 AI 梳理，建议基于 `data/reports/YYYY-MM-DD/ai-inputs.jsonl` 再做一个独立步骤：
 
 1. 按 `person + date + project + session_id` 分组。
 2. 每组只发送 `input_preview` 和必要统计字段，不发送完整 `input_text`。
 3. 让 AI 输出 `session_title`、`work_summary`、`risk_or_blocker`、`deliverable`。
 4. 回写一个 `ai_session_summary.md` 或 `ai_session_summary.jsonl`。
 
-这样不会影响每日基础导出，也能控制隐私和 token 成本。
+这样不会影响本地日报生成，也能控制隐私和 token 成本。
 
 ## 口径说明
 

@@ -1,21 +1,12 @@
 #!/usr/bin/env python3
-"""
-Export and summarize Codex / Claude Code usage as a tiny daily package.
-
-Daily export package:
-  inputs.jsonl  - one normalized record per real user input turn
-  summary.md    - human-readable summary for quick review
-"""
+"""Generate local personal workday reports from Codex / Claude Code usage and Git activity."""
 
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
-import statistics
 import sys
-import zipfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
@@ -121,25 +112,6 @@ def text_preview(text: str, limit: int = 120) -> str:
     return clean[: limit - 1] + "..."
 
 
-def fmt_seconds(seconds: float | int | None) -> str:
-    if seconds is None:
-        return "-"
-    sec = int(round(float(seconds)))
-    days, rem = divmod(sec, 86400)
-    hours, rem = divmod(rem, 3600)
-    minutes, sec = divmod(rem, 60)
-    parts: list[str] = []
-    if days:
-        parts.append(f"{days}天")
-    if hours:
-        parts.append(f"{hours}小时")
-    if minutes:
-        parts.append(f"{minutes}分")
-    if sec or not parts:
-        parts.append(f"{sec}秒")
-    return "".join(parts)
-
-
 def read_jsonl(path: Path) -> Iterable[dict[str, Any]]:
     with path.open("r", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -150,10 +122,6 @@ def read_jsonl(path: Path) -> Iterable[dict[str, Any]]:
                 yield json.loads(line)
             except json.JSONDecodeError:
                 continue
-
-
-def json_dumps(obj: Any) -> str:
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
 def extract_text_from_content(content: Any) -> str:
@@ -615,353 +583,6 @@ def collect_turns(args: argparse.Namespace, start: datetime, end: datetime, tz: 
     return turns
 
 
-def aggregate(records: list[dict[str, Any]], keys: list[str]) -> list[dict[str, Any]]:
-    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
-    for rec in records:
-        groups[tuple(rec.get(k) for k in keys)].append(rec)
-    rows: list[dict[str, Any]] = []
-    for key, items in sorted(groups.items(), key=lambda kv: kv[0]):
-        row = {k: v for k, v in zip(keys, key)}
-        row["session_count"] = len({x.get("session_id") for x in items if x.get("session_id")})
-        row["turn_count"] = len(items)
-        for field_name in (
-            "input_tokens",
-            "response_tokens",
-            "cache_tokens",
-            "reasoning_tokens",
-            "total_tokens",
-            "ai_active_seconds",
-            "wallclock_seconds",
-        ):
-            row[field_name] = sum(float(x.get(field_name) or 0) for x in items)
-        intervals = [float(x["input_interval_seconds"]) for x in items if x.get("input_interval_seconds") is not None]
-        gaps = [float(x["after_done_gap_seconds"]) for x in items if x.get("after_done_gap_seconds") is not None]
-        row["avg_input_interval_seconds"] = statistics.mean(intervals) if intervals else None
-        row["median_input_interval_seconds"] = statistics.median(intervals) if intervals else None
-        row["avg_after_done_gap_seconds"] = statistics.mean(gaps) if gaps else None
-        row["median_after_done_gap_seconds"] = statistics.median(gaps) if gaps else None
-        rows.append(row)
-    return rows
-
-
-def markdown_summary(records: list[dict[str, Any]], title: str) -> str:
-    total = aggregate(records, [])[0] if records else {}
-    by_day = aggregate(records, ["date"])
-    by_project = aggregate(records, ["project"])
-    by_tool = aggregate(records, ["tool"])
-    high_tokens = sorted(records, key=lambda x: int(x.get("total_tokens") or 0), reverse=True)[:10]
-    long_tasks = sorted(records, key=lambda x: float(x.get("ai_active_seconds") or 0), reverse=True)[:10]
-
-    lines = [f"# {title}", ""]
-    lines.extend(
-        [
-            "## 总览",
-            "",
-            f"- 输入轮数：{int(total.get('turn_count') or 0)}",
-            f"- 会话数：{int(total.get('session_count') or 0)}",
-            f"- AI执行时长：{fmt_seconds(total.get('ai_active_seconds') or 0)}",
-            f"- 对话占用时长：{fmt_seconds(total.get('wallclock_seconds') or 0)}",
-            f"- 输入token：{int(total.get('input_tokens') or 0):,}",
-            f"- 响应token：{int(total.get('response_tokens') or 0):,}",
-            f"- cache token：{int(total.get('cache_tokens') or 0):,}",
-            f"- reasoning token：{int(total.get('reasoning_tokens') or 0):,}",
-            f"- 总token：{int(total.get('total_tokens') or 0):,}",
-            f"- 平均输入间隔：{fmt_seconds(total.get('avg_input_interval_seconds'))}",
-            "",
-        ]
-    )
-    lines.extend(workflow_section(records))
-    lines.extend(table_section("按天", by_day, ["date"]))
-    lines.extend(table_section("按工具", by_tool, ["tool"]))
-    lines.extend(table_section("按项目", by_project, ["project"]))
-    lines.extend(session_summary_section(records))
-    lines.extend(detail_section("高token轮次", high_tokens, "total_tokens"))
-    lines.extend(detail_section("长任务轮次", long_tasks, "ai_active_seconds"))
-    return "\n".join(lines) + "\n"
-
-
-def workflow_section(records: list[dict[str, Any]]) -> list[str]:
-    samples: list[dict[str, float]] = []
-    gap_values: list[float] = []
-    for row in records:
-        input_at = parse_dt(str(row.get("input_at") or ""))
-        next_input_at = parse_dt(str(row.get("next_input_at") or ""))
-        if input_at is None or next_input_at is None:
-            continue
-        interval = max(0.0, (next_input_at - input_at).total_seconds())
-        ai_seconds = max(0.0, float(row.get("ai_active_seconds") or 0))
-        ai_component = min(ai_seconds, interval)
-        # For rhythm decomposition, keep the two parts inside the same
-        # input-to-next-input window. Some Codex native events can start a
-        # task a few seconds before the user_message event, so raw
-        # after_done_gap_seconds is kept in inputs.jsonl but not used for
-        # percentage decomposition.
-        gap_seconds = max(0.0, interval - ai_component)
-        samples.append(
-            {
-                "interval": interval,
-                "ai": ai_component,
-                "gap": min(gap_seconds, interval),
-            }
-        )
-        gap_values.append(gap_seconds)
-
-    lines = ["## 输入节奏拆解", ""]
-    if not samples:
-        return lines + ["有效样本不足。", ""]
-
-    total_interval = sum(x["interval"] for x in samples)
-    total_ai = sum(x["ai"] for x in samples)
-    total_gap = sum(x["gap"] for x in samples)
-    ai_ratio = (total_ai / total_interval * 100.0) if total_interval else 0.0
-    gap_ratio = (total_gap / total_interval * 100.0) if total_interval else 0.0
-    intervals = [x["interval"] for x in samples]
-    ai_values = [x["ai"] for x in samples]
-
-    lines.extend(
-        [
-            "> 这里的“接续/审查间隔”不是空闲时间，通常包含看 AI 结果、人工验证、切换项目、整理需求、处理并行会话等动作。",
-            "",
-            f"- 有效节奏样本：{len(samples)}",
-            f"- 平均输入到下一输入：{fmt_seconds(statistics.mean(intervals))}",
-            f"- 其中平均 AI 运行：{fmt_seconds(statistics.mean(ai_values))}",
-            f"- 其中平均接续/审查：{fmt_seconds(statistics.mean(gap_values))}",
-            f"- 按时间拆分：AI运行约 {ai_ratio:.1f}% / 接续审查约 {gap_ratio:.1f}%",
-            "",
-        ]
-    )
-
-    buckets = [
-        ("1分钟内即时接续", 0, 60),
-        ("1-5分钟快速审查", 60, 300),
-        ("5-15分钟正常验证", 300, 900),
-        ("15-30分钟深度处理", 900, 1800),
-        ("30分钟以上跨任务/休息/并行", 1800, float("inf")),
-    ]
-    lines.append("| 接续/审查区间 | 轮数 | 占比 |")
-    lines.append("|---|---:|---:|")
-    for label, low, high in buckets:
-        count = sum(1 for v in gap_values if low <= v < high)
-        ratio = count / len(gap_values) * 100.0 if gap_values else 0.0
-        lines.append(f"| {label} | {count} | {ratio:.1f}% |")
-    lines.append("")
-    return lines
-
-
-def table_section(title: str, rows: list[dict[str, Any]], key_cols: list[str]) -> list[str]:
-    lines = [f"## {title}", ""]
-    if not rows:
-        return lines + ["无数据", ""]
-    cols = key_cols + ["turn_count", "ai_active_seconds", "input_tokens", "response_tokens", "cache_tokens", "total_tokens"]
-    header = ["项目" if c == "project" else "工具" if c == "tool" else "日期" if c == "date" else c for c in cols]
-    lines.append("| " + " | ".join(header) + " |")
-    lines.append("|" + "|".join(["---"] * len(cols)) + "|")
-    for row in sorted(rows, key=lambda x: int(x.get("total_tokens") or 0), reverse=True):
-        vals: list[str] = []
-        for col in cols:
-            val = row.get(col)
-            if col.endswith("_seconds"):
-                vals.append(fmt_seconds(val or 0))
-            elif isinstance(val, (int, float)):
-                vals.append(f"{int(val):,}")
-            else:
-                vals.append(str(val))
-        lines.append("| " + " | ".join(vals) + " |")
-    lines.append("")
-    return lines
-
-
-def summarize_session_inputs(items: list[dict[str, Any]]) -> str:
-    previews = [str(x.get("input_preview") or "").strip() for x in items if x.get("input_preview")]
-    previews = [p for p in previews if p]
-    if not previews:
-        return "-"
-    if len(previews) == 1:
-        return previews[0]
-    first = previews[0]
-    rest = previews[1:]
-    # Keep deterministic and privacy-light. This is intentionally a compact
-    # rule summary; the full input text remains in inputs.jsonl for AI review.
-    themes = []
-    for p in rest[:3]:
-        if p not in themes and p != first:
-            themes.append(p)
-    suffix = "；".join(themes)
-    summary = first if not suffix else f"{first}；后续：{suffix}"
-    return text_preview(summary, 180)
-
-
-def session_summary_section(records: list[dict[str, Any]]) -> list[str]:
-    lines = ["## 会话摘要", ""]
-    if not records:
-        return lines + ["无数据", ""]
-    groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
-    for row in records:
-        key = (
-            str(row.get("person") or ""),
-            str(row.get("tool") or ""),
-            str(row.get("project") or ""),
-            str(row.get("session_id") or ""),
-        )
-        groups[key].append(row)
-
-    rows: list[dict[str, Any]] = []
-    for (person, tool, project, session_id), items in groups.items():
-        items = sorted(items, key=lambda x: str(x.get("input_at") or ""))
-        rows.append(
-            {
-                "person": person,
-                "tool": tool,
-                "project": project,
-                "session_id": session_id,
-                "start": items[0].get("input_at"),
-                "end": items[-1].get("input_at"),
-                "turn_count": len(items),
-                "ai_active_seconds": sum(float(x.get("ai_active_seconds") or 0) for x in items),
-                "total_tokens": sum(int(x.get("total_tokens") or 0) for x in items),
-                "summary": summarize_session_inputs(items),
-            }
-        )
-    rows.sort(key=lambda x: (str(x["start"]), str(x["project"])))
-
-    lines.append("| 开始时间 | 工具 | 项目 | 轮数 | AI时长 | 总token | 输入内容摘要 |")
-    lines.append("|---|---|---|---:|---:|---:|---|")
-    for row in rows[:30]:
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    str(row["start"] or ""),
-                    str(row["tool"] or ""),
-                    str(row["project"] or ""),
-                    str(row["turn_count"]),
-                    fmt_seconds(row["ai_active_seconds"]),
-                    f"{int(row['total_tokens']):,}",
-                    str(row["summary"]).replace("|", "\\|"),
-                ]
-            )
-            + " |"
-        )
-    if len(rows) > 30:
-        lines.append(f"| ... | ... | ... | ... | ... | ... | 仅展示前30个会话，共{len(rows)}个 |")
-    lines.append("")
-    return lines
-
-
-def detail_section(title: str, rows: list[dict[str, Any]], sort_field: str) -> list[str]:
-    lines = [f"## {title}", ""]
-    if not rows:
-        return lines + ["无数据", ""]
-    lines.append("| 时间 | 工具 | 项目 | AI时长 | 总token | 输入摘要 |")
-    lines.append("|---|---|---|---:|---:|---|")
-    for row in rows:
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    str(row.get("input_at") or ""),
-                    str(row.get("tool") or ""),
-                    str(row.get("project") or ""),
-                    fmt_seconds(row.get("ai_active_seconds") or 0),
-                    f"{int(row.get('total_tokens') or 0):,}",
-                    str(row.get("input_preview") or "").replace("|", "\\|"),
-                ]
-            )
-            + " |"
-        )
-    lines.append("")
-    return lines
-
-
-def write_export_zip(records: list[dict[str, Any]], out_dir: Path, person: str, label: str) -> Path:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = out_dir / f"ai-usage-{person}-{label}.zip"
-    inputs_data = "\n".join(json_dumps(r) for r in records) + ("\n" if records else "")
-    summary = markdown_summary(records, f"AI 使用统计 - {person} - {label}")
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        z.writestr("inputs.jsonl", inputs_data)
-        z.writestr("summary.md", summary)
-    return zip_path
-
-
-def command_export(args: argparse.Namespace) -> int:
-    tz = ZoneInfo(args.timezone)
-    if args.command == "export-day":
-        export_day = date.fromisoformat(args.date)
-        start, end = day_bounds(export_day, tz)
-        label = export_day.isoformat()
-    else:
-        start_day = date.fromisoformat(args.from_date)
-        end_day = date.fromisoformat(args.to_date)
-        start, _ = day_bounds(start_day, tz)
-        _, end = day_bounds(end_day, tz)
-        label = f"{start_day.isoformat()}_{end_day.isoformat()}"
-
-    log_progress(args, f"导出范围: {start.isoformat()} -> {end.isoformat()}")
-    turns = collect_turns(args, start, end, tz)
-    records = [turn.to_record(tz) for turn in turns]
-    if args.project:
-        allowed_projects = set(args.project)
-        before_count = len(records)
-        records = [r for r in records if r.get("project") in allowed_projects]
-        log_progress(args, f"项目过滤: {before_count} -> {len(records)}")
-    log_progress(args, "写出 zip 包...")
-    zip_path = write_export_zip(records, Path(args.out).expanduser(), args.person, label)
-    print(f"Exported {len(records)} turns to {zip_path}")
-    return 0
-
-
-def read_inputs_from_zip_or_file(path: Path) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    if path.suffix == ".zip":
-        with zipfile.ZipFile(path) as z:
-            if "inputs.jsonl" not in z.namelist():
-                return records
-            with z.open("inputs.jsonl") as f:
-                for raw in f:
-                    line = raw.decode("utf-8", errors="replace").strip()
-                    if line:
-                        records.append(json.loads(line))
-    elif path.name == "inputs.jsonl" or path.suffix == ".jsonl":
-        for obj in read_jsonl(path):
-            records.append(obj)
-    return records
-
-
-def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not rows:
-        path.write_text("", encoding="utf-8")
-        return
-    fieldnames = list(rows[0].keys())
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
-
-
-def command_merge(args: argparse.Namespace) -> int:
-    input_dir = Path(args.input).expanduser()
-    out_dir = Path(args.out).expanduser()
-    records: list[dict[str, Any]] = []
-    for path in sorted(input_dir.glob("*")):
-        if path.is_file() and (path.suffix in {".zip", ".jsonl"} or path.name == "inputs.jsonl"):
-            log_progress(args, f"读取: {path}")
-            records.extend(read_inputs_from_zip_or_file(path))
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "team_inputs.jsonl").write_text(
-        "\n".join(json_dumps(r) for r in records) + ("\n" if records else ""),
-        encoding="utf-8",
-    )
-    write_csv(out_dir / "team_daily_summary.csv", aggregate(records, ["person", "date", "tool"]))
-    write_csv(out_dir / "team_project_summary.csv", aggregate(records, ["person", "project", "tool"]))
-    write_csv(out_dir / "team_person_summary.csv", aggregate(records, ["person"]))
-    (out_dir / "summary.md").write_text(markdown_summary(records, "团队 AI 使用统计"), encoding="utf-8")
-    print(f"Merged {len(records)} turns into {out_dir}")
-    return 0
-
-
 def command_init_config(args: argparse.Namespace) -> int:
     path = Path(args.out).expanduser()
     write_default_config(path, args.project or [])
@@ -1133,11 +754,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_config.add_argument("--project", action="append", default=[], help="项目配置，格式 name=path 或 name=path|repo_url，可重复传入")
     p_config.set_defaults(func=command_init_config)
 
-    p_day = sub.add_parser("export-day", help="导出某一天的 inputs.jsonl + summary.md zip")
-    add_common_export_args(p_day)
-    p_day.add_argument("--date", required=True, help="YYYY-MM-DD")
-    p_day.set_defaults(func=command_export)
-
     p_workday = sub.add_parser("export-workday", help="导出 v2 个人研发工作日报")
     add_common_export_args(p_workday)
     p_workday.add_argument("--date", required=True, help="YYYY-MM-DD")
@@ -1174,17 +790,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_month.add_argument("--out", default=".", help="输出目录")
     p_month.set_defaults(func=command_export_month)
 
-    p_range = sub.add_parser("export-range", help="导出日期范围，起止日期均包含")
-    add_common_export_args(p_range)
-    p_range.add_argument("--from", dest="from_date", required=True, help="YYYY-MM-DD")
-    p_range.add_argument("--to", dest="to_date", required=True, help="YYYY-MM-DD")
-    p_range.set_defaults(func=command_export)
-
-    p_merge = sub.add_parser("merge", help="合并多人每日 zip，生成团队汇总")
-    p_merge.add_argument("--input", required=True, help="包含 ai-usage-*.zip 的目录")
-    p_merge.add_argument("--out", required=True, help="团队报表输出目录")
-    p_merge.add_argument("--verbose", action="store_true", help="显示读取进度")
-    p_merge.set_defaults(func=command_merge)
     return parser
 
 
