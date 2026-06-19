@@ -228,6 +228,38 @@ python .\mcp_server.py
 
 工具参数里的 `config` 可选，默认读取当前目录下的 `aiusage-config.json`。MCP Server 只读取配置中的 `data_dir` 和 `data/reports/` 下的本地报告；如果指定日期没有日报，会返回结构化错误和 warning。
 
+## ChatGPT Remote MCP 第一版
+
+ChatGPT 不能直接连接本地 `stdio` MCP，所以第一版新增 HTTP MCP Server，方便通过 HTTPS tunnel 暴露给 ChatGPT 自定义 MCP connector。
+
+本地启动：
+
+```powershell
+$env:AIUSAGE_MCP_TOKEN = "<local-random-token>"
+python .\mcp_http_server.py --host 127.0.0.1 --port 8765
+```
+
+接口：
+
+- `GET /health`：健康检查，不返回日报数据。
+- `POST /mcp`：MCP JSON-RPC endpoint，复用本地 stdio MCP 的只读工具。
+
+Remote MCP 访问需要 bearer token：
+
+```text
+Authorization: Bearer <local-random-token>
+```
+
+请求来自 `127.0.0.1` 或 `::1` 且没有 token 时允许访问，方便本地 smoke test；通过 tunnel 访问时必须配置 token。不要把 token 写入代码、README、测试数据或提交记录。
+
+ChatGPT 侧需要填写 HTTPS tunnel 的 `/mcp` 地址，例如：
+
+```text
+https://<tunnel-host>/mcp
+```
+
+可使用 Cloudflare Tunnel、ngrok 或其他 HTTPS tunnel 把 `http://127.0.0.1:8765` 暴露出去。当前 Remote MCP 仍然只读：不上传云端、不自动提交 Git、不删除报告、不新增写入型工具、不自动扫描 ChatGPT 聊天记录。
+
 ## ai-inputs.jsonl 字段
 
 关键字段：
