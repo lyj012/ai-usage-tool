@@ -27,3 +27,5 @@ Do not commit:
 - When a token is configured, every `/mcp` request must include `Authorization: Bearer <token>`, including requests forwarded from localhost.
 - Remote HTTP MCP returns a sanitized view and ignores caller-supplied `config` paths.
 - The HTTP transport is not yet verified with ChatGPT connector or MCP Inspector in this repository.
+- Remote HTTP MCP uses `session_ref` instead of raw `session_id`; this is a stable reference for follow-up queries, not a guarantee that all business-sensitive text has been removed.
+- Text redaction covers common local paths, URLs, emails, and token/key/password patterns. It cannot understand every company name, customer name, or proprietary business term.

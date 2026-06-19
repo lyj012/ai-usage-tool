@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Correct MCP `outputSchema` so each tool describes its `structuredContent`, and add schema validation tests.
+- Make Remote HTTP `tools/list` hide local-only `config` and raw `session_id` inputs.
+- Add stable Remote `session_ref` support for cross-tool session detail lookup.
+- Add HTTP JSON-RPC boundary checks for `Accept`, `Origin`, `MCP-Protocol-Version`, `GET /mcp`, notifications, and batch rejection.
+- Improve Remote text redaction for URLs, common token/key/password patterns, UNC paths, and paths containing spaces.
+- Fix editable install metadata by explicitly declaring top-level Python modules and separating package version `0.3.0` from MCP server version `3.0.0`.
 - Harden Remote HTTP MCP authentication: when `AIUSAGE_MCP_TOKEN` is set, localhost-forwarded requests must also send the correct bearer token.
 - Add a sanitized Remote MCP response boundary that removes local paths, source files, full AI input text, emails, full hashes, and raw session IDs from HTTP responses.
 - Prevent Remote MCP callers from overriding the server-side config path.

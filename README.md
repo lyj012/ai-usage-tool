@@ -40,7 +40,7 @@ Codex / Claude Code 会话
 | 历史趋势、周报、月报 | 可用 | 基于已生成日报聚合，不重新扫描原始记录 |
 | Streamlit Dashboard | 可用 | 本地看板查看日报和趋势 |
 | 本地 stdio MCP | 可用 | 给本机 MCP 客户端读取本地报告 |
-| HTTP MCP | 实验 | 自定义 HTTP JSON-RPC transport，已做本地测试，尚未通过 ChatGPT connector 实测 |
+| HTTP MCP | 实验 | 自定义 HTTP JSON-RPC transport，已做本地测试，不是标准 Streamable HTTP MCP |
 | ChatGPT Remote MCP | 未完成端到端验证 | 仍需要 HTTPS tunnel 和 ChatGPT connector 真实验证 |
 
 ## 隐私和安全提示
@@ -95,6 +95,15 @@ pip install tiktoken
 ```bash
 pip install -e ".[dashboard,tokens]"
 ```
+
+安装后可使用 CLI：
+
+```bash
+aiusage --help
+aiusage list-reports --help
+```
+
+如果 Windows 提示找不到 `aiusage`，通常是用户级 Python Scripts 目录没有加入 `PATH`，可先使用 `python .\aiusage.py ...`，或把 pip 输出提示的 Scripts 目录加入 `PATH`。
 
 ## 推荐分发方式
 
@@ -310,7 +319,7 @@ python .\mcp_server.py
 
 ## HTTP MCP 实验版
 
-ChatGPT 不能直接连接本地 `stdio` MCP，所以项目提供了一个实验性 HTTP MCP Server，用于后续通过 HTTPS tunnel 验证 Remote MCP。当前仓库只验证了本地 HTTP JSON-RPC 行为，尚未声明已通过 ChatGPT connector 或 MCP Inspector。
+ChatGPT 不能直接连接本地 `stdio` MCP，所以项目提供了一个实验性 HTTP MCP Server，用于后续通过 HTTPS tunnel 验证 Remote MCP。当前仓库只验证了本地 HTTP JSON-RPC 行为，尚未声明已通过 ChatGPT connector 或 MCP Inspector，也不声明已经完整实现标准 Streamable HTTP MCP。
 
 本地启动：
 
@@ -323,6 +332,7 @@ python .\mcp_http_server.py --host 127.0.0.1 --port 8765
 
 - `GET /health`：健康检查，不返回日报数据。
 - `POST /mcp`：MCP JSON-RPC endpoint，复用本地 stdio MCP 的只读工具。
+- `GET /mcp`：当前不支持 SSE / Streamable HTTP，返回 Method Not Allowed。
 
 Remote MCP 访问需要 bearer token：
 
@@ -339,6 +349,20 @@ https://<tunnel-host>/mcp
 ```
 
 可使用 Cloudflare Tunnel、ngrok 或其他 HTTPS tunnel 把 `http://127.0.0.1:8765` 暴露出去。当前 HTTP MCP 仍然只读：不上传云端、不自动提交 Git、不删除报告、不新增写入型工具、不自动扫描 ChatGPT 聊天记录。HTTP 响应默认会移除本地路径、完整 AI 输入、邮箱、完整 session ID 和完整 hash 等远程不必要字段。
+
+HTTP MCP 与本地 stdio MCP 的差异：
+
+- stdio MCP 可使用 `config` 参数读取指定本地配置。
+- HTTP MCP 的工具列表不会暴露 `config` 参数，远程调用方不能选择服务端配置文件。
+- HTTP MCP 会把原始 `session_id` 转换成 `session_ref`；后续查询会话详情时使用 `session_ref`。
+- HTTP MCP 会对文本内容做有限脱敏，包括本地路径、邮箱、URL 和常见 token/key/password 形态。它不能保证识别所有公司名称、客户名称或业务敏感语义。
+
+## 版本口径
+
+- 产品/CLI 包版本：`0.3.0`，见 `pyproject.toml` 和 `aiusage --version`。
+- MCP Server 版本：`3.0.0`，表示 MCP 能力阶段，不等于 Python 包版本。
+- 日报 schema：当前日报为 `schema_version: 2.0`，趋势/周报/月报为 `2.1`。
+- MCP 协议版本：`2025-06-18`，用于当前手写 JSON-RPC MCP surface。
 
 ## ai-inputs.jsonl 字段
 

@@ -43,6 +43,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 
 ISO_Z = "%Y-%m-%dT%H:%M:%S%z"
+PRODUCT_VERSION = "0.3.0"
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 WEEK_RE = re.compile(r"^\d{4}-W\d{2}$")
 MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
@@ -83,6 +84,12 @@ def valid_month_arg(value: str) -> str:
 def log_progress(args: argparse.Namespace, message: str) -> None:
     if getattr(args, "verbose", False):
         print(message, flush=True)
+
+
+def configure_stdio() -> None:
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
 
 
 def parse_dt(value: str | None) -> datetime | None:
@@ -785,6 +792,7 @@ def add_common_export_args(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="aiusage", description="Codex / Claude Code usage exporter")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {PRODUCT_VERSION}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_config = sub.add_parser("init-config", help="创建 v2 本地项目配置")
@@ -832,6 +840,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))

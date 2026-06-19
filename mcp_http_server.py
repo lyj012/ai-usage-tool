@@ -16,13 +16,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlsplit
 
-from mcp_server import SERVER_NAME, handle_request
+from mcp_server import PROTOCOL_VERSION, SERVER_NAME, handle_request
 
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 TOKEN_ENV_NAME = "AIUSAGE_MCP_TOKEN"
 CONFIG_ENV_NAME = "AIUSAGE_MCP_CONFIG"
+ALLOWED_ORIGINS_ENV_NAME = "AIUSAGE_MCP_ALLOWED_ORIGINS"
 MAX_BODY_BYTES = 64 * 1024
 
 
@@ -53,6 +54,20 @@ def is_authorized(client_host: str, authorization_header: str | None, expected_t
     return False
 
 
+def accepts_json(header_value: str | None) -> bool:
+    if not header_value:
+        return True
+    values = [part.split(";", 1)[0].strip().lower() for part in header_value.split(",")]
+    return "*/*" in values or "application/*" in values or "application/json" in values
+
+
+def is_allowed_origin(origin: str | None, allowed_origins_text: str | None) -> bool:
+    if not origin:
+        return True
+    allowed = {item.strip() for item in (allowed_origins_text or "").split(",") if item.strip()}
+    return origin in allowed
+
+
 class McpHttpHandler(BaseHTTPRequestHandler):
     server_version = SERVER_NAME
     sys_version = ""
@@ -64,7 +79,11 @@ class McpHttpHandler(BaseHTTPRequestHandler):
         return SERVER_NAME
 
     def do_GET(self) -> None:
-        if self.path_only() != "/health":
+        path = self.path_only()
+        if path == "/mcp":
+            self.send_json(HTTPStatus.METHOD_NOT_ALLOWED, {"error": "sse_not_supported", "message": "GET /mcp is not supported by this experimental JSON-RPC transport."})
+            return
+        if path != "/health":
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
             return
         self.send_json(
@@ -77,6 +96,16 @@ class McpHttpHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if self.path_only() != "/mcp":
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+            return
+        if not accepts_json(self.headers.get("Accept")):
+            self.send_json(HTTPStatus.NOT_ACCEPTABLE, {"error": "not_acceptable"})
+            return
+        if not is_allowed_origin(self.headers.get("Origin"), os.environ.get(ALLOWED_ORIGINS_ENV_NAME)):
+            self.send_json(HTTPStatus.FORBIDDEN, {"error": "origin_not_allowed"})
+            return
+        protocol_version = self.headers.get("MCP-Protocol-Version")
+        if protocol_version and protocol_version != PROTOCOL_VERSION:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": "unsupported_protocol_version"})
             return
         token = os.environ.get(TOKEN_ENV_NAME)
         client_host = self.client_address[0] if self.client_address else ""
@@ -112,9 +141,9 @@ class McpHttpHandler(BaseHTTPRequestHandler):
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_request", "message": "Request body must be a JSON object"})
             return
 
-        response = handle_request(request, remote=True, remote_config=os.environ.get(CONFIG_ENV_NAME) or "aiusage-config.json")
+        response = handle_request(request, remote=True, remote_config=getattr(self.server, "remote_config", "aiusage-config.json"))
         if response is None:
-            self.send_json(HTTPStatus.ACCEPTED, {"status": "accepted"})
+            self.send_empty(HTTPStatus.ACCEPTED)
             return
         self.send_json(HTTPStatus.OK, response)
 
@@ -141,12 +170,24 @@ class McpHttpHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Pragma", "no-cache")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("MCP-Protocol-Version", PROTOCOL_VERSION)
         self.end_headers()
         self.wfile.write(raw)
 
+    def send_empty(self, status: HTTPStatus) -> None:
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("MCP-Protocol-Version", PROTOCOL_VERSION)
+        self.end_headers()
+
 
 def build_server(host: str, port: int) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), McpHttpHandler)
+    server = ThreadingHTTPServer((host, port), McpHttpHandler)
+    server.remote_config = os.environ.get(CONFIG_ENV_NAME) or "aiusage-config.json"  # type: ignore[attr-defined]
+    return server
 
 
 def serve_http(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> int:

@@ -44,8 +44,8 @@ class McpHttpServerTest(unittest.TestCase):
                                 "project": "demo",
                                 "project_cwd": "C:\\Users\\alice\\work\\private-repo",
                                 "source_file": "C:\\Users\\alice\\.codex\\sessions\\session-secret-123.jsonl",
-                                "input_text": "full private prompt with password-like secret",
-                                "input_preview": "full private prompt with password-like secret",
+                                "input_text": "full private prompt token=super-secret-token https://internal.example.local/path",
+                                "input_preview": "full private prompt token=super-secret-token https://internal.example.local/path",
                             }
                         ]
                     },
@@ -54,10 +54,10 @@ class McpHttpServerTest(unittest.TestCase):
                             {
                                 "hash": "abcdef1234567890",
                                 "short_hash": "abcdef1",
-                                "message": "feat: update report",
+                                "message": "feat: update report with api_key=abcdef123456",
                                 "author_email": "alice@example.com",
                                 "repo_path": "C:\\Users\\alice\\work\\private-repo",
-                                "file_summaries": [{"path": "C:\\Users\\alice\\work\\private-repo\\secret.py"}],
+                                "file_summaries": [{"path": "\\\\corp-fs\\share\\Secret Project\\secret.py"}],
                             }
                         ],
                         "file_changes": [],
@@ -65,7 +65,7 @@ class McpHttpServerTest(unittest.TestCase):
                     "technical_topics": [],
                     "rework_and_exceptions": [],
                     "associations": [{"session_id": "session-secret-123", "matched_commits": [{"commit_hash": "abcdef1234567890"}]}],
-                    "unmatched_ai_sessions": [{"session_id": "session-secret-123", "reason": "local path C:\\Users\\alice\\work"}],
+                    "unmatched_ai_sessions": [{"session_id": "session-secret-123", "reason": "local path C:\\Users\\Alice Smith\\work and https://internal.example.local"}],
                     "warnings": [],
                     "today_outcome": "http mcp test",
                 },
@@ -100,26 +100,30 @@ class McpHttpServerTest(unittest.TestCase):
             os.environ[mcp_http_server.CONFIG_ENV_NAME] = self.old_config
         self.tmp.cleanup()
 
-    def request_json(self, path, method="GET", body=None, token=None):
+    def request_json(self, path, method="GET", body=None, token=None, headers=None):
         data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
+        request_headers = {"Content-Type": "application/json"}
+        request_headers.update(headers or {})
         request = urllib.request.Request(
             self.base_url + path,
             data=data,
             method=method,
-            headers={"Content-Type": "application/json"},
+            headers=request_headers,
         )
         if token is not None:
             request.add_header("Authorization", f"Bearer {token}")
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
 
-    def request_raw(self, path, method="GET", body=None, token=None):
+    def request_raw(self, path, method="GET", body=None, token=None, headers=None):
         data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(self.base_url + path, data=data, method=method)
         if data is not None:
             request.add_header("Content-Type", "application/json")
         if token is not None:
             request.add_header("Authorization", f"Bearer {token}")
+        for key, value in (headers or {}).items():
+            request.add_header(key, value)
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, response.headers, response.read().decode("utf-8")
 
@@ -138,6 +142,7 @@ class McpHttpServerTest(unittest.TestCase):
             "/mcp",
             method="POST",
             token="test-token",
+            headers={"Accept": "application/json", "MCP-Protocol-Version": "2025-06-18"},
             body={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
         )
         self.assertEqual(status, 200)
@@ -151,7 +156,13 @@ class McpHttpServerTest(unittest.TestCase):
         )
         names = {tool["name"] for tool in tools["result"]["tools"]}
         self.assertIn("get_daily_work_report", names)
+        for tool in tools["result"]["tools"]:
+            self.assertNotIn("config", tool["inputSchema"]["properties"])
+        session_tool = next(tool for tool in tools["result"]["tools"] if tool["name"] == "get_ai_session_details")
+        self.assertIn("session_ref", session_tool["inputSchema"]["properties"])
+        self.assertNotIn("session_id", session_tool["inputSchema"]["properties"])
 
+        os.environ[mcp_http_server.CONFIG_ENV_NAME] = str(self.evil_config)
         _, report = self.request_json(
             "/mcp",
             method="POST",
@@ -162,13 +173,14 @@ class McpHttpServerTest(unittest.TestCase):
                 "method": "tools/call",
                 "params": {
                     "name": "get_daily_work_report",
-                    "arguments": {"date": "2026-06-15", "config": str(self.evil_config)},
+                    "arguments": {"date": "2026-06-15"},
                 },
             },
         )
         self.assertFalse(report["result"]["isError"])
         self.assertEqual(report["result"]["structuredContent"]["report"]["date"], "2026-06-15")
         self.assertEqual(report["result"]["structuredContent"]["report"]["today_outcome"], "http mcp test")
+        self.assertEqual(json.loads(report["result"]["content"][0]["text"]), report["result"]["structuredContent"])
 
     def test_missing_date_returns_structured_error(self):
         _, payload = self.request_json(
@@ -181,7 +193,7 @@ class McpHttpServerTest(unittest.TestCase):
                 "method": "tools/call",
                 "params": {
                     "name": "get_daily_work_report",
-                    "arguments": {"config": str(self.config)},
+                    "arguments": {},
                 },
             },
         )
@@ -239,7 +251,7 @@ class McpHttpServerTest(unittest.TestCase):
                 "method": "tools/call",
                 "params": {
                     "name": "get_ai_session_details",
-                    "arguments": {"date": "2026-06-15", "config": str(self.evil_config)},
+                    "arguments": {"date": "2026-06-15"},
                 },
             },
         )
@@ -248,12 +260,56 @@ class McpHttpServerTest(unittest.TestCase):
         self.assertNotIn("source_file", raw)
         self.assertNotIn("project_cwd", raw)
         self.assertNotIn("C:\\Users\\alice", raw)
+        self.assertNotIn("C:\\Users\\Alice Smith", raw)
+        self.assertNotIn("\\\\corp-fs", raw)
         self.assertNotIn("alice@example.com", raw)
+        self.assertNotIn("super-secret-token", raw)
+        self.assertNotIn("api_key=abcdef123456", raw)
+        self.assertNotIn("https://internal.example.local", raw)
         self.assertNotIn("session-secret-123", raw)
         self.assertNotIn("abcdef1234567890", raw)
         self.assertIn("session_ref", raw)
 
+    def test_remote_session_ref_can_query_details(self):
+        _, report = self.request_json(
+            "/mcp",
+            method="POST",
+            token="test-token",
+            body={
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_daily_work_report",
+                    "arguments": {"date": "2026-06-15"},
+                },
+            },
+        )
+        session_ref = report["result"]["structuredContent"]["report"]["associations"][0]["session_ref"]
+        _, details = self.request_json(
+            "/mcp",
+            method="POST",
+            token="test-token",
+            body={
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_ai_session_details",
+                    "arguments": {"date": "2026-06-15", "session_ref": session_ref},
+                },
+            },
+        )
+        self.assertFalse(details["result"]["isError"])
+        self.assertEqual(details["result"]["structuredContent"]["session_ref"], session_ref)
+        self.assertEqual(len(details["result"]["structuredContent"]["turns"]), 1)
+
     def test_resource_limits_and_methods(self):
+        with self.assertRaises(urllib.error.HTTPError) as get_mcp:
+            self.request_raw("/mcp", method="GET", token="test-token")
+        self.assertEqual(get_mcp.exception.code, 405)
+        get_mcp.exception.close()
+
         with self.assertRaises(urllib.error.HTTPError) as raised:
             self.request_raw("/mcp", method="PUT", body={"x": 1}, token="test-token")
         self.assertEqual(raised.exception.code, 405)
@@ -264,6 +320,46 @@ class McpHttpServerTest(unittest.TestCase):
             self.request_json("/mcp", method="POST", body=large_body, token="test-token")
         self.assertEqual(too_large.exception.code, 413)
         too_large.exception.close()
+
+    def test_http_protocol_boundaries(self):
+        body = {"jsonrpc": "2.0", "id": 12, "method": "tools/list", "params": {}}
+        with self.assertRaises(urllib.error.HTTPError) as bad_accept:
+            self.request_json("/mcp", method="POST", body=body, token="test-token", headers={"Accept": "text/html"})
+        self.assertEqual(bad_accept.exception.code, 406)
+        bad_accept.exception.close()
+
+        with self.assertRaises(urllib.error.HTTPError) as bad_version:
+            self.request_json("/mcp", method="POST", body=body, token="test-token", headers={"MCP-Protocol-Version": "1900-01-01"})
+        self.assertEqual(bad_version.exception.code, 400)
+        bad_version.exception.close()
+
+        with self.assertRaises(urllib.error.HTTPError) as bad_origin:
+            self.request_json("/mcp", method="POST", body=body, token="test-token", headers={"Origin": "https://evil.example"})
+        self.assertEqual(bad_origin.exception.code, 403)
+        bad_origin.exception.close()
+
+        status, headers, raw = self.request_raw(
+            "/mcp",
+            method="POST",
+            body={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+            token="test-token",
+        )
+        self.assertEqual(status, 202)
+        self.assertEqual(raw, "")
+        self.assertEqual(headers["Content-Length"], "0")
+
+        _, _, invalid_jsonrpc = self.request_raw(
+            "/mcp",
+            method="POST",
+            body={"jsonrpc": "1.0", "id": 13, "method": "tools/list", "params": {}},
+            token="test-token",
+        )
+        self.assertEqual(json.loads(invalid_jsonrpc)["error"]["code"], -32600)
+
+        with self.assertRaises(urllib.error.HTTPError) as batch:
+            self.request_json("/mcp", method="POST", body=[body], token="test-token")
+        self.assertEqual(batch.exception.code, 400)
+        batch.exception.close()
 
 
 if __name__ == "__main__":

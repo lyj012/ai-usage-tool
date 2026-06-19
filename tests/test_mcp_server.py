@@ -6,6 +6,46 @@ from pathlib import Path
 import mcp_server
 
 
+def assert_schema_matches(testcase, schema, value):
+    expected_type = schema.get("type")
+    if isinstance(expected_type, list):
+        if value is None:
+            testcase.assertIn("null", expected_type)
+            return
+        testcase.assertTrue(any(type_matches(t, value) for t in expected_type), f"{value!r} does not match {expected_type}")
+    elif expected_type:
+        testcase.assertTrue(type_matches(expected_type, value), f"{value!r} does not match {expected_type}")
+    if expected_type == "object":
+        properties = schema.get("properties") or {}
+        for key in schema.get("required") or []:
+            testcase.assertIn(key, value)
+        if schema.get("additionalProperties") is False:
+            testcase.assertFalse(set(value.keys()) - set(properties.keys()))
+        for key, child in properties.items():
+            if key in value:
+                assert_schema_matches(testcase, child, value[key])
+    if expected_type == "array":
+        item_schema = schema.get("items") or {}
+        for item in value:
+            assert_schema_matches(testcase, item_schema, item)
+
+
+def type_matches(expected_type, value):
+    if expected_type == "object":
+        return isinstance(value, dict)
+    if expected_type == "array":
+        return isinstance(value, list)
+    if expected_type == "string":
+        return isinstance(value, str)
+    if expected_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected_type == "boolean":
+        return isinstance(value, bool)
+    if expected_type == "null":
+        return value is None
+    return True
+
+
 class McpServerTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -77,6 +117,9 @@ class McpServerTest(unittest.TestCase):
         self.assertTrue(all(tool["annotations"]["openWorldHint"] is False for tool in tools))
         self.assertTrue(all(tool["inputSchema"]["additionalProperties"] is False for tool in tools))
         self.assertTrue(all("outputSchema" in tool for tool in tools))
+        daily = next(tool for tool in tools if tool["name"] == "get_daily_work_report")
+        self.assertIn("config", daily["inputSchema"]["properties"])
+        self.assertNotIn("structuredContent", daily["outputSchema"]["properties"])
 
     def test_get_daily_report_tool(self):
         result = mcp_server.get_daily_work_report(
@@ -138,6 +181,43 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(result["jsonrpc"], "2.0")
         self.assertEqual(result["id"], 1)
         self.assertIn("tools", result["result"])
+
+    def test_tool_outputs_match_output_schema_and_content(self):
+        calls = [
+            (
+                "get_daily_work_report",
+                {"date": "2026-06-15", "config": str(self.config)},
+            ),
+            (
+                "get_work_trend",
+                {"from": "2026-06-15", "to": "2026-06-15", "config": str(self.config)},
+            ),
+            (
+                "search_work_records",
+                {"query": "redis", "from": "2026-06-15", "to": "2026-06-15", "config": str(self.config)},
+            ),
+            (
+                "get_git_activity",
+                {"date": "2026-06-15", "config": str(self.config)},
+            ),
+            (
+                "get_ai_session_details",
+                {"date": "2026-06-15", "session_id": "s1", "config": str(self.config)},
+            ),
+        ]
+        tools = {tool["name"]: tool for tool in mcp_server.list_tools()}
+        for name, arguments in calls:
+            result = mcp_server.handle_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": name,
+                    "method": "tools/call",
+                    "params": {"name": name, "arguments": arguments},
+                }
+            )
+            structured = result["result"]["structuredContent"]
+            assert_schema_matches(self, tools[name]["outputSchema"], structured)
+            self.assertEqual(json.loads(result["result"]["content"][0]["text"]), structured)
 
     def test_argument_validation(self):
         bad_date = mcp_server.handle_request(

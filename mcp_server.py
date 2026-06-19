@@ -28,6 +28,7 @@ from workreport import (
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "ai-usage-tool"
 SERVER_VERSION = "3.0.0"
+PRODUCT_VERSION = "0.3.0"
 MAX_RANGE_DAYS = 31
 MAX_SEARCH_LIMIT = 50
 DEFAULT_SEARCH_LIMIT = 20
@@ -35,11 +36,24 @@ MAX_QUERY_CHARS = 120
 MAX_SESSION_ID_CHARS = 128
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 LOCAL_PATH_RE = re.compile(
-    r"(?i)([a-z]:\\[^\s,;:，。；]+(?:\\[^\s,;:，。；]+)*|/users/[^\s,;:，。；]+(?:/[^\s,;:，。；]+)*|/home/[^\s,;:，。；]+(?:/[^\s,;:，。；]+)*)"
+    r"(?i)([a-z]:\\[^,;，。；\r\n]+|\\\\[^,;，。；\r\n]+|/(?:users|home)/[^,;，。；\r\n]+)"
 )
 EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
+URL_RE = re.compile(r"(?i)\b(?:https?://|ssh://|git@)[^\s]+")
+SECRET_RE = re.compile(
+    r"(?i)\b("
+    r"sk-[A-Za-z0-9_-]{10,}|"
+    r"gh[pousr]_[A-Za-z0-9_]{10,}|"
+    r"xox[baprs]-[A-Za-z0-9-]{10,}|"
+    r"AKIA[0-9A-Z]{12,}|"
+    r"Bearer\s+[A-Za-z0-9._~+/=-]{10,}|"
+    r"(?:api[_-]?key|token|password|passwd|secret)\s*[:=]\s*[^,\s;，。；]+"
+    r")\b"
+)
 REMOTE_REMOVED_KEYS = {
     "input_text",
+    "input_preview",
+    "input_summary",
     "source_file",
     "project_cwd",
     "repo_path",
@@ -48,7 +62,6 @@ REMOTE_REMOVED_KEYS = {
     "email",
     "turn_id",
     "hash",
-    "commit_hash",
     "path",
 }
 
@@ -222,6 +235,7 @@ def get_git_activity(arguments: dict[str, Any]) -> dict[str, Any]:
 def get_ai_session_details(arguments: dict[str, Any]) -> dict[str, Any]:
     day = require_date(arguments, "date")
     session_id = optional_string(arguments, "session_id", MAX_SESSION_ID_CHARS)
+    session_ref = optional_string(arguments, "session_ref", MAX_SESSION_ID_CHARS)
     data_dir, warnings = resolve_data_dir(arguments.get("config"))
     report, report_warnings = load_daily_report(data_dir, day)
     warnings.extend(report_warnings)
@@ -234,10 +248,17 @@ def get_ai_session_details(arguments: dict[str, Any]) -> dict[str, Any]:
         turns = [row for row in turns if str(row.get("session_id") or "") == session_id]
         associations = [row for row in associations if str(row.get("session_id") or "") == session_id]
         unmatched = [row for row in unmatched if str(row.get("session_id") or "") == session_id]
+    if session_ref:
+        turns = [row for row in turns if session_reference(row.get("session_id")) == session_ref]
+        associations = [row for row in associations if session_reference(row.get("session_id")) == session_ref]
+        unmatched = [row for row in unmatched if session_reference(row.get("session_id")) == session_ref]
+    if (session_id or session_ref) and not (turns or associations or unmatched):
+        return tool_result({"date": day, "session_ref": session_ref or None, "warnings": ["未找到指定 AI 会话。"]}, is_error=True)
     return tool_result(
         {
             "date": day,
             "session_id": session_id or None,
+            "session_ref": session_ref or None,
             "turns": turns,
             "associations": associations,
             "unmatched_ai_sessions": unmatched,
@@ -262,7 +283,10 @@ def require_string(arguments: dict[str, Any], key: str) -> str:
 
 
 def validate_arguments(name: str, arguments: dict[str, Any]) -> None:
-    schema = TOOLS[name][1]
+    validate_arguments_with_schema(arguments, TOOLS[name][1])
+
+
+def validate_arguments_with_schema(arguments: dict[str, Any], schema: dict[str, Any]) -> None:
     properties = schema.get("properties") or {}
     allowed = set(properties.keys())
     extra = sorted(set(arguments.keys()) - allowed)
@@ -311,15 +335,60 @@ def object_schema(properties: dict[str, Any], required: list[str]) -> dict[str, 
     }
 
 
-def output_schema() -> dict[str, Any]:
-    return object_schema(
+def string_array_schema() -> dict[str, Any]:
+    return {"type": "array", "items": {"type": "string"}}
+
+
+def loose_object_schema() -> dict[str, Any]:
+    return {"type": "object"}
+
+
+OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "get_daily_work_report": object_schema(
         {
-            "content": {"type": "array"},
-            "structuredContent": {"type": "object"},
-            "isError": {"type": "boolean"},
+            "date": {"type": "string"},
+            "report": loose_object_schema(),
+            "warnings": string_array_schema(),
         },
-        ["content", "structuredContent", "isError"],
-    )
+        ["warnings"],
+    ),
+    "get_work_trend": object_schema(
+        {
+            "trend": loose_object_schema(),
+            "warnings": string_array_schema(),
+        },
+        ["trend", "warnings"],
+    ),
+    "search_work_records": object_schema(
+        {
+            "query": {"type": "string"},
+            "matches": {"type": "array", "items": loose_object_schema()},
+            "warnings": string_array_schema(),
+        },
+        ["query", "matches", "warnings"],
+    ),
+    "get_git_activity": object_schema(
+        {
+            "date": {"type": "string"},
+            "git_workload": loose_object_schema(),
+            "overview": loose_object_schema(),
+            "warnings": string_array_schema(),
+        },
+        ["date", "git_workload", "overview", "warnings"],
+    ),
+    "get_ai_session_details": object_schema(
+        {
+            "date": {"type": "string"},
+            "session_id": {"type": ["string", "null"]},
+            "session_ref": {"type": ["string", "null"]},
+            "turns": {"type": "array", "items": loose_object_schema()},
+            "associations": {"type": "array", "items": loose_object_schema()},
+            "unmatched_ai_sessions": {"type": "array", "items": loose_object_schema()},
+            "warnings": string_array_schema(),
+        },
+        ["date", "turns", "associations", "unmatched_ai_sessions", "warnings"],
+    ),
+}
 
 
 def remote_config_arguments(arguments: dict[str, Any], config_path: str | None) -> dict[str, Any]:
@@ -327,6 +396,31 @@ def remote_config_arguments(arguments: dict[str, Any], config_path: str | None) 
     result.pop("config", None)
     result["config"] = config_path or "aiusage-config.json"
     return result
+
+
+def remote_input_schema(name: str) -> dict[str, Any]:
+    schema = deepcopy(TOOLS[name][1])
+    properties = schema.get("properties") or {}
+    properties.pop("config", None)
+    if name == "get_ai_session_details":
+        properties.pop("session_id", None)
+        properties["session_ref"] = {
+            "type": "string",
+            "maxLength": MAX_SESSION_ID_CHARS,
+            "description": "Remote HTTP 模式返回的稳定会话引用。不要传原始 session_id。",
+        }
+    required = [key for key in schema.get("required") or [] if key != "config"]
+    schema["properties"] = properties
+    schema["required"] = required
+    return schema
+
+
+def input_schema_for(name: str, remote: bool) -> dict[str, Any]:
+    return remote_input_schema(name) if remote else deepcopy(TOOLS[name][1])
+
+
+def output_schema_for(name: str) -> dict[str, Any]:
+    return deepcopy(OUTPUT_SCHEMAS[name])
 
 
 def remote_safe_response(response_data: dict[str, Any]) -> dict[str, Any]:
@@ -350,7 +444,10 @@ def remote_safe_value(value: Any, key: str | None = None) -> Any:
             if normalized in REMOTE_REMOVED_KEYS:
                 continue
             if normalized == "session_id":
-                result["session_ref"] = stable_ref(child_value, "session")
+                result["session_ref"] = session_reference(child_value)
+                continue
+            if normalized == "commit_hash":
+                result["commit_ref"] = stable_ref(child_value, "commit")
                 continue
             result[normalized] = remote_safe_value(child_value, normalized)
         return result
@@ -359,10 +456,16 @@ def remote_safe_value(value: Any, key: str | None = None) -> Any:
     if isinstance(value, str):
         text = EMAIL_RE.sub("[redacted-email]", value)
         text = LOCAL_PATH_RE.sub("[local-path]", text)
+        text = URL_RE.sub("[redacted-url]", text)
+        text = SECRET_RE.sub("[redacted-secret]", text)
         if key in {"text", "input_preview", "input_summary"} and len(text) > 240:
             text = text[:239] + "..."
         return text
     return value
+
+
+def session_reference(value: Any) -> str:
+    return stable_ref(value, "session")
 
 
 def stable_ref(value: Any, prefix: str) -> str:
@@ -440,25 +543,33 @@ TOOLS: dict[str, tuple[str, dict[str, Any], ToolHandler]] = {
 }
 
 
-def list_tools() -> list[dict[str, Any]]:
+def list_tools(remote: bool = False) -> list[dict[str, Any]]:
     return [
         {
             "name": name,
             "title": name.replace("_", " ").title(),
             "description": description,
-            "inputSchema": input_schema,
-            "outputSchema": output_schema(),
+            "inputSchema": input_schema_for(name, remote),
+            "outputSchema": output_schema_for(name),
             "annotations": tool_annotations(),
         }
-        for name, (description, input_schema, _) in TOOLS.items()
+        for name, (description, _, _) in TOOLS.items()
     ]
 
 
 def handle_request(request: dict[str, Any], *, remote: bool = False, remote_config: str | None = None) -> dict[str, Any] | None:
+    if not isinstance(request, dict):
+        return error_response(None, -32600, "Request must be an object")
     method = request.get("method")
     request_id = request.get("id")
+    if request_id is not None and (isinstance(request_id, bool) or not isinstance(request_id, (str, int))):
+        return error_response(None, -32600, "Request id must be a string, integer, or null")
     if request_id is None:
         return None
+    if request.get("jsonrpc") != "2.0":
+        return error_response(request_id, -32600, "jsonrpc must be 2.0")
+    if not isinstance(method, str) or not method:
+        return error_response(request_id, -32600, "method is required")
     try:
         if method == "initialize":
             return response(
@@ -470,7 +581,7 @@ def handle_request(request: dict[str, Any], *, remote: bool = False, remote_conf
                 },
             )
         if method == "tools/list":
-            return response(request_id, {"tools": list_tools()})
+            return response(request_id, {"tools": list_tools(remote=remote)})
         if method == "tools/call":
             params = request.get("params") or {}
             if not isinstance(params, dict):
@@ -481,8 +592,8 @@ def handle_request(request: dict[str, Any], *, remote: bool = False, remote_conf
                 return error_response(request_id, -32602, f"Unknown tool: {name}")
             if not isinstance(arguments, dict):
                 return error_response(request_id, -32602, "Tool arguments must be an object")
+            validate_arguments_with_schema(arguments, input_schema_for(name, remote))
             arguments = remote_config_arguments(arguments, remote_config) if remote else deepcopy(arguments)
-            validate_arguments(name, arguments)
             handler = TOOLS[name][2]
             result = response(request_id, handler(arguments))
             return remote_safe_response(result) if remote else result

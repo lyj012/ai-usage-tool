@@ -618,7 +618,7 @@ save_technical_asset
 验证：python -m py_compile aiusage.py app.py workreport.py mcp_server.py mcp_http_server.py tests\test_workreport.py tests\test_mcp_server.py tests\test_mcp_http_server.py
 验证：python -m unittest discover -s tests
 验证：HTTP smoke test 启动 python .\mcp_http_server.py --host 127.0.0.1 --port 8765，调用 GET /health、POST /mcp initialize、tools/list、tools/call get_daily_work_report，并验证无 token / 错 token / 正确 token 行为。
-备注：新增 mcp_http_server.py，复用 mcp_server.handle_request()、TOOLS、SERVER_NAME、SERVER_VERSION；POST /mcp 和 GET /health 均为 UTF-8 JSON 响应；token 从 AIUSAGE_MCP_TOKEN 读取；已加固为配置 token 后本机和 tunnel 转发请求都必须带正确 bearer token；未配置 token 时仅允许本机 smoke test；Remote HTTP MCP 忽略调用方 config，返回脱敏视图。当前未做 OAuth、固定域名、ChatGPT 端真实 connector 验证、MCP Inspector 验证和生产级 rate limit；不能声明已完整兼容 ChatGPT Remote MCP。
+备注：新增 mcp_http_server.py，复用 mcp_server.handle_request()、TOOLS、SERVER_NAME、SERVER_VERSION；POST /mcp 和 GET /health 均为 UTF-8 JSON 响应；token 从 AIUSAGE_MCP_TOKEN 读取；已加固为配置 token 后本机和 tunnel 转发请求都必须带正确 bearer token；未配置 token 时仅允许本机 smoke test；Remote HTTP MCP 忽略调用方 config，返回脱敏视图，远程工具 schema 不暴露 config 和原始 session_id，跨工具会话查询使用 session_ref；每个工具 outputSchema 已改为对应 structuredContent。当前未做 OAuth、固定域名、ChatGPT 端真实 connector 验证、MCP Inspector 验证、SSE/Streamable HTTP 和生产级 rate limit；不能声明已完整兼容 ChatGPT Remote MCP。
 ```
 
 ## 8. 推荐执行顺序
