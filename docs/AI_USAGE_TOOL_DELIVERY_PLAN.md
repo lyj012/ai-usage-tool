@@ -590,7 +590,7 @@ save_technical_asset
 ```text
 状态：DONE
 完成日期：2026-06-19
-提交：待提交（用户确认后生成 commit hash）
+提交：f569e00 feat: add local MCP report server
 验证：python -m py_compile aiusage.py app.py workreport.py mcp_server.py tests\test_workreport.py tests\test_mcp_server.py
 验证：python -m unittest discover -s tests
 验证：使用 Python subprocess 通过 stdio JSON-RPC 调用 initialize、tools/list、get_git_activity、get_work_trend、get_daily_work_report 缺失日期错误，均返回结构化 JSON。
