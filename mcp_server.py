@@ -22,8 +22,8 @@ from workreport import (
     list_daily_report_dates,
     load_config,
     load_daily_report,
-    load_daily_reports_range,
 )
+from report_prepare import ensure_daily_report, ensure_daily_reports_range
 
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -137,6 +137,13 @@ def search_limit(arguments: dict[str, Any]) -> int:
     return raw
 
 
+def refresh_mode(arguments: dict[str, Any]) -> str:
+    mode = str(arguments.get("refresh_mode") or "auto").strip() or "auto"
+    if mode not in {"auto", "cache", "force"}:
+        raise ValueError("refresh_mode 必须是 auto、cache 或 force")
+    return mode
+
+
 def tool_result(data: dict[str, Any], is_error: bool = False) -> dict[str, Any]:
     return {
         "content": [{"type": "text", "text": json_dumps(data)}],
@@ -147,19 +154,26 @@ def tool_result(data: dict[str, Any], is_error: bool = False) -> dict[str, Any]:
 
 def get_daily_work_report(arguments: dict[str, Any]) -> dict[str, Any]:
     day = require_date(arguments, "date")
-    data_dir, warnings = resolve_data_dir(arguments.get("config"))
-    report, report_warnings = load_daily_report(data_dir, day)
-    warnings.extend(report_warnings)
-    if report is None:
-        return tool_result({"date": day, "warnings": warnings}, is_error=True)
-    return tool_result({"report": report, "warnings": warnings})
+    mode = refresh_mode(arguments)
+    result = ensure_daily_report(day, arguments.get("config"), mode)
+    if result.report is None:
+        return tool_result(
+            {
+                "date": day,
+                "data_status": "failed",
+                "error_code": result.error_code or "REPORT_GENERATION_FAILED",
+                "data_freshness": result.freshness(mode),
+                "warnings": result.warnings,
+            },
+            is_error=True,
+        )
+    return tool_result({"report": result.report, "data_freshness": result.freshness(mode), "warnings": result.warnings})
 
 
 def get_work_trend(arguments: dict[str, Any]) -> dict[str, Any]:
     start_day, end_day = require_date_range(arguments)
-    data_dir, warnings = resolve_data_dir(arguments.get("config"))
-    reports, report_warnings = load_daily_reports_range(data_dir, start_day, end_day)
-    warnings.extend(report_warnings)
+    mode = refresh_mode(arguments)
+    reports, range_meta, warnings = ensure_daily_reports_range(start_day, end_day, arguments.get("config"), mode)
     trend = build_period_report(
         "range",
         f"{start_day}_{end_day}",
@@ -167,7 +181,20 @@ def get_work_trend(arguments: dict[str, Any]) -> dict[str, Any]:
         reports,
         warnings,
     )
-    return tool_result({"trend": trend, "warnings": warnings})
+    trend["date_range"] = {"from": start_day, "to": end_day}
+    trend.update(
+        {
+            "requested_date_range": range_meta["requested_date_range"],
+            "effective_date_range": range_meta["effective_date_range"],
+            "processed_dates": range_meta["processed_dates"],
+            "generated_dates": range_meta["generated_dates"],
+            "refreshed_dates": range_meta["refreshed_dates"],
+            "cached_dates": range_meta["cached_dates"],
+            "failed_dates": range_meta["failed_dates"],
+            "report_day_count": range_meta["report_day_count"],
+        }
+    )
+    return tool_result({"trend": trend, **range_meta, "warnings": warnings})
 
 
 def search_work_records(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -176,14 +203,16 @@ def search_work_records(arguments: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"query 不能超过 {MAX_QUERY_CHARS} 个字符")
     query = query.lower()
     limit = search_limit(arguments)
+    mode = refresh_mode(arguments)
     data_dir, warnings = resolve_data_dir(arguments.get("config"))
     start_day = optional_date(arguments, "from")
     end_day = optional_date(arguments, "to")
+    range_meta: dict[str, Any] = {}
     if bool(start_day) != bool(end_day):
         raise ValueError("from 和 to 必须同时提供")
     if start_day and end_day:
         require_date_range({"from": start_day, "to": end_day})
-        reports, report_warnings = load_daily_reports_range(data_dir, start_day, end_day)
+        reports, range_meta, report_warnings = ensure_daily_reports_range(start_day, end_day, arguments.get("config"), mode)
         warnings.extend(report_warnings)
     else:
         dates, date_warnings = list_daily_report_dates(data_dir)
@@ -213,35 +242,54 @@ def search_work_records(arguments: dict[str, Any]) -> dict[str, Any]:
             add_match(matches, query, limit, day, "association", row)
         if len(matches) >= limit:
             break
-    return tool_result({"query": query, "matches": matches[:limit], "warnings": warnings})
+    return tool_result({"query": query, "matches": matches[:limit], **range_meta, "warnings": warnings})
 
 
 def get_git_activity(arguments: dict[str, Any]) -> dict[str, Any]:
     day = require_date(arguments, "date")
-    data_dir, warnings = resolve_data_dir(arguments.get("config"))
-    report, report_warnings = load_daily_report(data_dir, day)
-    warnings.extend(report_warnings)
-    if report is None:
-        return tool_result({"date": day, "warnings": warnings}, is_error=True)
+    mode = refresh_mode(arguments)
+    result = ensure_daily_report(day, arguments.get("config"), mode)
+    if result.report is None:
+        return tool_result(
+            {
+                "date": day,
+                "data_status": "failed",
+                "error_code": result.error_code or "REPORT_GENERATION_FAILED",
+                "data_freshness": result.freshness(mode),
+                "warnings": result.warnings,
+            },
+            is_error=True,
+        )
+    report = result.report
     return tool_result(
         {
             "date": day,
             "git_workload": report.get("git_workload") or {},
             "overview": report.get("overview") or {},
-            "warnings": warnings,
+            "data_freshness": result.freshness(mode),
+            "warnings": result.warnings,
         }
     )
 
 
 def get_ai_session_details(arguments: dict[str, Any]) -> dict[str, Any]:
     day = require_date(arguments, "date")
+    mode = refresh_mode(arguments)
     session_id = optional_string(arguments, "session_id", MAX_SESSION_ID_CHARS)
     session_ref = optional_string(arguments, "session_ref", MAX_SESSION_ID_CHARS)
-    data_dir, warnings = resolve_data_dir(arguments.get("config"))
-    report, report_warnings = load_daily_report(data_dir, day)
-    warnings.extend(report_warnings)
-    if report is None:
-        return tool_result({"date": day, "warnings": warnings}, is_error=True)
+    result = ensure_daily_report(day, arguments.get("config"), mode)
+    if result.report is None:
+        return tool_result(
+            {
+                "date": day,
+                "data_status": "failed",
+                "error_code": result.error_code or "REPORT_GENERATION_FAILED",
+                "data_freshness": result.freshness(mode),
+                "warnings": result.warnings,
+            },
+            is_error=True,
+        )
+    report = result.report
     turns = (report.get("ai_usage") or {}).get("turns") or []
     associations = report.get("associations") or []
     unmatched = report.get("unmatched_ai_sessions") or []
@@ -254,7 +302,15 @@ def get_ai_session_details(arguments: dict[str, Any]) -> dict[str, Any]:
         associations = [row for row in associations if session_reference(row.get("session_id")) == session_ref]
         unmatched = [row for row in unmatched if session_reference(row.get("session_id")) == session_ref]
     if (session_id or session_ref) and not (turns or associations or unmatched):
-        return tool_result({"date": day, "session_ref": session_ref or None, "warnings": ["未找到指定 AI 会话。"]}, is_error=True)
+        return tool_result(
+            {
+                "date": day,
+                "session_ref": session_ref or None,
+                "data_freshness": result.freshness(mode),
+                "warnings": ["未找到指定 AI 会话。"],
+            },
+            is_error=True,
+        )
     return tool_result(
         {
             "date": day,
@@ -263,7 +319,8 @@ def get_ai_session_details(arguments: dict[str, Any]) -> dict[str, Any]:
             "turns": turns,
             "associations": associations,
             "unmatched_ai_sessions": unmatched,
-            "warnings": warnings,
+            "data_freshness": result.freshness(mode),
+            "warnings": result.warnings,
         }
     )
 
@@ -344,11 +401,18 @@ def loose_object_schema() -> dict[str, Any]:
     return {"type": "object"}
 
 
+def freshness_schema() -> dict[str, Any]:
+    return loose_object_schema()
+
+
 OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "get_daily_work_report": object_schema(
         {
             "date": {"type": "string"},
             "report": loose_object_schema(),
+            "data_status": {"type": "string"},
+            "error_code": {"type": "string"},
+            "data_freshness": freshness_schema(),
             "warnings": string_array_schema(),
         },
         ["warnings"],
@@ -356,6 +420,14 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "get_work_trend": object_schema(
         {
             "trend": loose_object_schema(),
+            "requested_date_range": loose_object_schema(),
+            "effective_date_range": loose_object_schema(),
+            "processed_dates": string_array_schema(),
+            "generated_dates": string_array_schema(),
+            "refreshed_dates": string_array_schema(),
+            "cached_dates": string_array_schema(),
+            "failed_dates": string_array_schema(),
+            "report_day_count": {"type": "integer"},
             "warnings": string_array_schema(),
         },
         ["trend", "warnings"],
@@ -364,6 +436,14 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
         {
             "query": {"type": "string"},
             "matches": {"type": "array", "items": loose_object_schema()},
+            "requested_date_range": loose_object_schema(),
+            "effective_date_range": loose_object_schema(),
+            "processed_dates": string_array_schema(),
+            "generated_dates": string_array_schema(),
+            "refreshed_dates": string_array_schema(),
+            "cached_dates": string_array_schema(),
+            "failed_dates": string_array_schema(),
+            "report_day_count": {"type": "integer"},
             "warnings": string_array_schema(),
         },
         ["query", "matches", "warnings"],
@@ -373,9 +453,12 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "date": {"type": "string"},
             "git_workload": loose_object_schema(),
             "overview": loose_object_schema(),
+            "data_status": {"type": "string"},
+            "error_code": {"type": "string"},
+            "data_freshness": freshness_schema(),
             "warnings": string_array_schema(),
         },
-        ["date", "git_workload", "overview", "warnings"],
+        ["date", "warnings"],
     ),
     "get_ai_session_details": object_schema(
         {
@@ -385,9 +468,12 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
             "turns": {"type": "array", "items": loose_object_schema()},
             "associations": {"type": "array", "items": loose_object_schema()},
             "unmatched_ai_sessions": {"type": "array", "items": loose_object_schema()},
+            "data_status": {"type": "string"},
+            "error_code": {"type": "string"},
+            "data_freshness": freshness_schema(),
             "warnings": string_array_schema(),
         },
-        ["date", "turns", "associations", "unmatched_ai_sessions", "warnings"],
+        ["date", "warnings"],
     ),
 }
 
@@ -403,6 +489,7 @@ def remote_input_schema(name: str) -> dict[str, Any]:
     schema = deepcopy(TOOLS[name][1])
     properties = schema.get("properties") or {}
     properties.pop("config", None)
+    properties.pop("refresh_mode", None)
     if name == "get_ai_session_details":
         properties.pop("session_id", None)
         properties["session_ref"] = {
@@ -481,10 +568,11 @@ ToolHandler = Callable[[dict[str, Any]], dict[str, Any]]
 
 TOOLS: dict[str, tuple[str, dict[str, Any], ToolHandler]] = {
     "get_daily_work_report": (
-        "只读读取指定日期的本地 daily-report.json；不访问互联网、不写文件、不删除数据。Remote HTTP 模式会返回脱敏视图。",
+        "只读查询指定日期日报；默认 auto 模式会在本地 data_dir/reports 下按需生成或刷新 daily-report.json。Remote HTTP 模式会返回脱敏视图。",
         object_schema(
             {
                 "date": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$", "description": "日期，格式 YYYY-MM-DD。"},
+                "refresh_mode": {"type": "string", "description": "本地 stdio 模式可选: auto/cache/force。Remote HTTP 模式默认 auto 且不暴露。"},
                 "config": {"type": "string", "maxLength": 500, "description": "本地 stdio 模式可选配置文件路径；Remote HTTP 模式会忽略调用方传入值。"},
             },
             ["date"],
@@ -492,12 +580,13 @@ TOOLS: dict[str, tuple[str, dict[str, Any], ToolHandler]] = {
         get_daily_work_report,
     ),
     "get_work_trend": (
-        "只读按日期范围读取本地日报并返回趋势聚合；日期范围最多 31 天，不访问互联网、不写文件。",
+        "只读按日期范围准备本地日报并返回趋势聚合；日期范围最多 31 天，不访问互联网，只在 data_dir/reports 下刷新缓存。",
         object_schema(
             {
                 "from": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$", "description": "开始日期 YYYY-MM-DD。"},
                 "to": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$", "description": "结束日期 YYYY-MM-DD。"},
                 "person": {"type": "string", "maxLength": 80, "description": "可选人员名。"},
+                "refresh_mode": {"type": "string", "description": "本地 stdio 模式可选: auto/cache/force。Remote HTTP 模式默认 auto 且不暴露。"},
                 "config": {"type": "string", "maxLength": 500, "description": "本地 stdio 模式可选配置文件路径；Remote HTTP 模式会忽略调用方传入值。"},
             },
             ["from", "to"],
@@ -505,13 +594,14 @@ TOOLS: dict[str, tuple[str, dict[str, Any], ToolHandler]] = {
         get_work_trend,
     ),
     "search_work_records": (
-        "只读搜索本地日报中的成果、主题、返工、commit 和 AI-Git 关联；不会访问互联网或修改数据。",
+        "只读搜索本地日报中的成果、主题、返工、commit 和 AI-Git 关联；指定日期范围时默认按需准备日报，不访问互联网。",
         object_schema(
             {
                 "query": {"type": "string", "minLength": 1, "maxLength": MAX_QUERY_CHARS, "description": "搜索关键词。"},
                 "from": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$", "description": "可选开始日期 YYYY-MM-DD。"},
                 "to": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$", "description": "可选结束日期 YYYY-MM-DD。"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": MAX_SEARCH_LIMIT, "description": "最多返回条数，默认 20。"},
+                "refresh_mode": {"type": "string", "description": "本地 stdio 模式可选: auto/cache/force。Remote HTTP 模式默认 auto 且不暴露。"},
                 "config": {"type": "string", "maxLength": 500, "description": "本地 stdio 模式可选配置文件路径；Remote HTTP 模式会忽略调用方传入值。"},
             },
             ["query"],
@@ -519,10 +609,11 @@ TOOLS: dict[str, tuple[str, dict[str, Any], ToolHandler]] = {
         search_work_records,
     ),
     "get_git_activity": (
-        "只读读取指定日期日报中的 Git 工作量明细；Remote HTTP 模式会移除本地路径、邮箱和完整 hash。",
+        "只读查询指定日期 Git 工作量明细；默认按需准备本地日报。Remote HTTP 模式会移除本地路径、邮箱和完整 hash。",
         object_schema(
             {
                 "date": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$", "description": "日期，格式 YYYY-MM-DD。"},
+                "refresh_mode": {"type": "string", "description": "本地 stdio 模式可选: auto/cache/force。Remote HTTP 模式默认 auto 且不暴露。"},
                 "config": {"type": "string", "maxLength": 500, "description": "本地 stdio 模式可选配置文件路径；Remote HTTP 模式会忽略调用方传入值。"},
             },
             ["date"],
@@ -530,11 +621,12 @@ TOOLS: dict[str, tuple[str, dict[str, Any], ToolHandler]] = {
         get_git_activity,
     ),
     "get_ai_session_details": (
-        "只读读取指定日期的 AI 会话摘要、关联和未关联原因；Remote HTTP 模式会移除完整输入文本和本地路径。",
+        "只读查询指定日期的 AI 会话摘要、关联和未关联原因；默认按需准备本地日报。Remote HTTP 模式会移除完整输入文本和本地路径。",
         object_schema(
             {
                 "date": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$", "description": "日期，格式 YYYY-MM-DD。"},
                 "session_id": {"type": "string", "maxLength": MAX_SESSION_ID_CHARS, "description": "可选 AI 会话 ID。"},
+                "refresh_mode": {"type": "string", "description": "本地 stdio 模式可选: auto/cache/force。Remote HTTP 模式默认 auto 且不暴露。"},
                 "config": {"type": "string", "maxLength": 500, "description": "本地 stdio 模式可选配置文件路径；Remote HTTP 模式会忽略调用方传入值。"},
             },
             ["date"],

@@ -1,11 +1,16 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import mcp_server
+import report_prepare
 
 
 def assert_schema_matches(testcase, schema, value):
@@ -57,7 +62,17 @@ class McpServerTest(unittest.TestCase):
         report_dir = self.data_dir / "reports" / "2026-06-15"
         report_dir.mkdir(parents=True)
         self.config.write_text(
-            json.dumps({"projects": [], "data_dir": str(self.data_dir)}, ensure_ascii=False),
+            json.dumps(
+                {
+                    "projects": [],
+                    "data_dir": str(self.data_dir),
+                    "codex_roots": [str(self.root / "missing-codex")],
+                    "claude_roots": [str(self.root / "missing-claude")],
+                    "project_roots": [],
+                    "skip_project_root_scan": True,
+                },
+                ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
         (report_dir / "daily-report.json").write_text(
@@ -134,8 +149,10 @@ class McpServerTest(unittest.TestCase):
         result = mcp_server.get_daily_work_report(
             {"date": "2026-06-16", "config": str(self.config)}
         )
-        self.assertTrue(result["isError"])
-        self.assertIn("warnings", result["structuredContent"])
+        self.assertFalse(result["isError"])
+        self.assertEqual(result["structuredContent"]["report"]["date"], "2026-06-16")
+        self.assertEqual(result["structuredContent"]["report"]["data_status"], "no_activity")
+        self.assertEqual(result["structuredContent"]["data_freshness"]["source"], "generated")
 
     def test_search_records_tool(self):
         result = mcp_server.search_work_records(
@@ -211,6 +228,7 @@ class McpServerTest(unittest.TestCase):
         tools = payload["result"]["tools"]
         for tool in tools:
             self.assertNotIn("config", tool["inputSchema"]["properties"])
+            self.assertNotIn("refresh_mode", tool["inputSchema"]["properties"])
         session_tool = next(tool for tool in tools if tool["name"] == "get_ai_session_details")
         self.assertNotIn("session_id", session_tool["inputSchema"]["properties"])
         self.assertIn("session_ref", session_tool["inputSchema"]["properties"])
@@ -305,10 +323,258 @@ class McpServerTest(unittest.TestCase):
         )
         self.assertEqual(bad_limit["error"]["code"], -32602)
 
+        bad_refresh = mcp_server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_daily_work_report",
+                    "arguments": {"date": "2026-06-15", "refresh_mode": "bad", "config": str(self.config)},
+                },
+            }
+        )
+        self.assertEqual(bad_refresh["error"]["code"], -32602)
+
         bad_params = mcp_server.handle_request(
-            {"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": "not-object"}
+            {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": "not-object"}
         )
         self.assertEqual(bad_params["error"]["code"], -32602)
+
+
+class McpAutoPrepareTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.data_dir = self.root / "data"
+        self.codex_root = self.root / "codex"
+        self.claude_root = self.root / "claude"
+        self.config = self.root / "aiusage-config.json"
+        self.config.write_text(
+            json.dumps(
+                {
+                    "person": "tester",
+                    "data_dir": str(self.data_dir),
+                    "projects": [],
+                    "codex_roots": [str(self.codex_root)],
+                    "claude_roots": [str(self.claude_root)],
+                    "project_roots": [],
+                    "skip_project_root_scan": True,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_codex_turn(self, day="2026-06-19", text="work on mcp auto report"):
+        self.codex_root.mkdir(parents=True, exist_ok=True)
+        path = self.codex_root / "codex-session.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps({"type": "turn_context", "payload": {"cwd": str(self.root / "demo")}}),
+                    json.dumps(
+                        {
+                            "timestamp": f"{day}T09:00:00+08:00",
+                            "type": "event_msg",
+                            "payload": {"type": "user_message", "message": text},
+                        },
+                        ensure_ascii=False,
+                    ),
+                    json.dumps(
+                        {
+                            "timestamp": f"{day}T09:01:00+08:00",
+                            "type": "event_msg",
+                            "payload": {"type": "task_complete"},
+                        },
+                        ensure_ascii=False,
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def write_claude_turn(self, day="2026-06-20", text="claude work item"):
+        self.claude_root.mkdir(parents=True, exist_ok=True)
+        path = self.claude_root / "claude-session.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "user",
+                            "timestamp": f"{day}T10:00:00+08:00",
+                            "sessionId": "claude-s1",
+                            "cwd": str(self.root / "demo"),
+                            "message": {"content": text},
+                        },
+                        ensure_ascii=False,
+                    ),
+                    json.dumps(
+                        {
+                            "type": "assistant",
+                            "timestamp": f"{day}T10:02:00+08:00",
+                            "sessionId": "claude-s1",
+                            "message": {"usage": {"input_tokens": 3, "output_tokens": 4}},
+                        },
+                        ensure_ascii=False,
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def test_daily_report_auto_generates_from_codex(self):
+        self.write_codex_turn()
+        result = mcp_server.get_daily_work_report({"date": "2026-06-19", "config": str(self.config)})
+        self.assertFalse(result["isError"])
+        content = result["structuredContent"]
+        self.assertEqual(content["data_freshness"]["source"], "generated")
+        self.assertEqual(content["report"]["overview"]["ai_turn_count"], 1)
+        self.assertEqual(content["report"]["data_status"], "available")
+        self.assertTrue((self.data_dir / "reports" / "2026-06-19" / "daily-report.json").exists())
+        self.assertTrue((self.data_dir / "reports" / "2026-06-19" / "report-meta.json").exists())
+
+    def test_daily_report_auto_generates_from_claude(self):
+        self.write_claude_turn()
+        result = mcp_server.get_ai_session_details({"date": "2026-06-20", "config": str(self.config)})
+        self.assertFalse(result["isError"])
+        self.assertEqual(len(result["structuredContent"]["turns"]), 1)
+        self.assertEqual(result["structuredContent"]["data_freshness"]["source"], "generated")
+
+    def test_git_activity_auto_generates_from_configured_repo(self):
+        repo = self.root / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(["git", "config", "user.name", "Tester"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "tester@example.com"], cwd=repo, check=True)
+        (repo / "README.md").write_text("hello\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+        env = {
+            **dict(),
+            "GIT_AUTHOR_DATE": "2026-06-19T09:00:00+08:00",
+            "GIT_COMMITTER_DATE": "2026-06-19T09:00:00+08:00",
+        }
+        subprocess.run(
+            ["git", "commit", "-m", "feat: add report docs"],
+            cwd=repo,
+            check=True,
+            env={**os.environ, **env},
+            stdout=subprocess.DEVNULL,
+        )
+        self.config.write_text(
+            json.dumps(
+                {
+                    "person": "tester",
+                    "data_dir": str(self.data_dir),
+                    "projects": [{"name": "repo", "path": str(repo)}],
+                    "codex_roots": [str(self.codex_root)],
+                    "claude_roots": [str(self.claude_root)],
+                    "project_roots": [],
+                    "skip_project_root_scan": True,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        result = mcp_server.get_git_activity({"date": "2026-06-19", "config": str(self.config)})
+        self.assertFalse(result["isError"])
+        self.assertEqual(result["structuredContent"]["overview"]["commit_count"], 1)
+        self.assertEqual(result["structuredContent"]["data_freshness"]["source"], "generated")
+
+    def test_empty_day_generates_no_activity_report(self):
+        result = mcp_server.get_daily_work_report({"date": "2026-06-18", "config": str(self.config)})
+        self.assertFalse(result["isError"])
+        report = result["structuredContent"]["report"]
+        self.assertEqual(report["overview"]["ai_turn_count"], 0)
+        self.assertEqual(report["overview"]["commit_count"], 0)
+        self.assertEqual(report["data_status"], "no_activity")
+
+    def test_range_query_auto_prepares_all_days(self):
+        self.write_codex_turn(day="2026-06-19")
+        result = mcp_server.get_work_trend(
+            {"from": "2026-06-18", "to": "2026-06-20", "config": str(self.config)}
+        )
+        self.assertFalse(result["isError"])
+        content = result["structuredContent"]
+        self.assertEqual(content["requested_date_range"], {"from": "2026-06-18", "to": "2026-06-20"})
+        self.assertEqual(content["report_day_count"], 3)
+        self.assertEqual(content["trend"]["date_range"], {"from": "2026-06-18", "to": "2026-06-20"})
+        self.assertEqual(len(content["processed_dates"]), 3)
+
+    def test_cache_hit_does_not_regenerate_valid_historical_report(self):
+        self.write_codex_turn(day="2026-06-19")
+        first = mcp_server.get_daily_work_report({"date": "2026-06-19", "config": str(self.config)})
+        self.assertFalse(first["isError"])
+        second = mcp_server.get_daily_work_report({"date": "2026-06-19", "config": str(self.config)})
+        self.assertFalse(second["isError"])
+        self.assertEqual(second["structuredContent"]["data_freshness"]["source"], "cache")
+
+    def test_source_mtime_refreshes_report(self):
+        source = self.write_codex_turn(day="2026-06-19", text="first mcp task")
+        first = mcp_server.get_daily_work_report({"date": "2026-06-19", "config": str(self.config)})
+        self.assertFalse(first["isError"])
+        time.sleep(1.1)
+        source.write_text(source.read_text(encoding="utf-8").replace("first mcp task", "second mcp task"), encoding="utf-8")
+        refreshed = mcp_server.get_daily_work_report({"date": "2026-06-19", "config": str(self.config)})
+        self.assertFalse(refreshed["isError"])
+        self.assertEqual(refreshed["structuredContent"]["data_freshness"]["source"], "refreshed")
+
+    def test_partial_failure_keeps_range_query_alive(self):
+        self.write_codex_turn(day="2026-06-19")
+        original = report_prepare.generate_daily_report
+
+        def fail_one_day(day, config, data_dir):
+            if day == "2026-06-18":
+                raise RuntimeError("boom")
+            return original(day, config, data_dir)
+
+        with mock.patch("report_prepare.generate_daily_report", side_effect=fail_one_day):
+            result = mcp_server.get_work_trend(
+                {"from": "2026-06-18", "to": "2026-06-19", "config": str(self.config), "refresh_mode": "force"}
+            )
+        self.assertFalse(result["isError"])
+        self.assertIn("2026-06-18", result["structuredContent"]["failed_dates"])
+        self.assertIn("2026-06-19", result["structuredContent"]["processed_dates"])
+
+    def test_concurrent_same_day_generates_once(self):
+        self.write_codex_turn(day="2026-06-19")
+        original = report_prepare.generate_daily_report
+        calls = 0
+        calls_lock = threading.Lock()
+
+        def counted(day, config, data_dir):
+            nonlocal calls
+            with calls_lock:
+                calls += 1
+            return original(day, config, data_dir)
+
+        results = []
+        with mock.patch("report_prepare.generate_daily_report", side_effect=counted):
+            threads = [
+                threading.Thread(
+                    target=lambda: results.append(
+                        mcp_server.get_daily_work_report({"date": "2026-06-19", "config": str(self.config)})
+                    )
+                )
+                for _ in range(3)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        self.assertEqual(calls, 1)
+        self.assertEqual(len(results), 3)
+        self.assertTrue(all(not item["isError"] for item in results))
+        json.loads((self.data_dir / "reports" / "2026-06-19" / "daily-report.json").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

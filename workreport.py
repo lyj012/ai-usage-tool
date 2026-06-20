@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from collections import Counter, defaultdict
@@ -1092,6 +1093,13 @@ def load_daily_report(data_dir: Path, day: str) -> tuple[dict[str, Any] | None, 
     return report, [warning] if warning else []
 
 
+def atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_text(text, encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
 def iter_days(start_day: date, end_day: date) -> list[str]:
     days = []
     current = start_day
@@ -1311,30 +1319,32 @@ def render_period_markdown(report: dict[str, Any]) -> str:
 
 def write_period_outputs(out_dir: Path, report: dict[str, Any], prefix: str) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"{prefix}-report.json").write_text(json_dumps(report) + "\n", encoding="utf-8")
-    (out_dir / f"{prefix}-report.md").write_text(render_period_markdown(report), encoding="utf-8")
+    atomic_write_text(out_dir / f"{prefix}-report.json", json_dumps(report) + "\n")
+    atomic_write_text(out_dir / f"{prefix}-report.md", render_period_markdown(report))
 
 
 def write_daily_outputs(out_dir: Path, report: dict[str, Any], ai_records: list[dict[str, Any]], commits: list[dict[str, Any]], file_changes: list[dict[str, Any]], associations: list[dict[str, Any]]) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "ai-inputs.jsonl").write_text(
+    if "data_status" not in report:
+        report["data_status"] = "available" if ai_records or commits or file_changes else "no_activity"
+    atomic_write_text(
+        out_dir / "ai-inputs.jsonl",
         "\n".join(compact_json_dumps(x) for x in ai_records) + ("\n" if ai_records else ""),
-        encoding="utf-8",
     )
-    (out_dir / "git-commits.jsonl").write_text(
+    atomic_write_text(
+        out_dir / "git-commits.jsonl",
         "\n".join(compact_json_dumps(x) for x in commits) + ("\n" if commits else ""),
-        encoding="utf-8",
     )
-    (out_dir / "git-file-changes.jsonl").write_text(
+    atomic_write_text(
+        out_dir / "git-file-changes.jsonl",
         "\n".join(compact_json_dumps(x) for x in file_changes) + ("\n" if file_changes else ""),
-        encoding="utf-8",
     )
-    (out_dir / "associations.jsonl").write_text(
+    atomic_write_text(
+        out_dir / "associations.jsonl",
         "\n".join(compact_json_dumps(x) for x in associations) + ("\n" if associations else ""),
-        encoding="utf-8",
     )
-    (out_dir / "daily-report.json").write_text(json_dumps(report) + "\n", encoding="utf-8")
-    (out_dir / "daily-report.md").write_text(render_daily_markdown(report), encoding="utf-8")
+    atomic_write_text(out_dir / "daily-report.json", json_dumps(report) + "\n")
+    atomic_write_text(out_dir / "daily-report.md", render_daily_markdown(report))
 
 
 def render_daily_markdown(report: dict[str, Any]) -> str:

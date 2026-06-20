@@ -76,6 +76,58 @@ class McpChatgptServerTest(unittest.TestCase):
         self.assertEqual(result["error"]["code"], -32602)
         self.assertIn("date", result["error"]["message"])
 
+    def test_remote_auto_generated_report_is_sanitized(self):
+        codex_root = self.root / "codex"
+        codex_root.mkdir()
+        source = codex_root / "session-secret-456.jsonl"
+        source.write_text(
+            "\n".join(
+                [
+                    json.dumps({"type": "turn_context", "payload": {"cwd": "C:\\Users\\alice\\secret-repo"}}),
+                    json.dumps(
+                        {
+                            "timestamp": "2026-06-19T09:00:00+08:00",
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": "private input token=super-secret-token C:\\Users\\alice\\secret-repo",
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.config.write_text(
+            json.dumps(
+                {
+                    "person": "tester",
+                    "projects": [],
+                    "data_dir": str(self.data_dir),
+                    "codex_roots": [str(codex_root)],
+                    "claude_roots": [str(self.root / "missing-claude")],
+                    "project_roots": [],
+                    "skip_project_root_scan": True,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        result = mcp_chatgpt_server.call_remote_tool(
+            "get_daily_work_report",
+            {"date": "2026-06-19"},
+            str(self.config),
+        )
+        raw = json.dumps(result, ensure_ascii=False)
+        self.assertEqual(result["report"]["date"], "2026-06-19")
+        self.assertNotIn("session-secret-456", raw)
+        self.assertNotIn("input_text", raw)
+        self.assertNotIn("C:\\Users\\alice", raw)
+        self.assertNotIn("super-secret-token", raw)
+        self.assertIn("session_ref", raw)
+
     def test_build_mcp_missing_dependency_message(self):
         if find_spec("mcp") is not None:
             self.skipTest("MCP SDK is installed in this environment.")

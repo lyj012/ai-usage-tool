@@ -27,4 +27,4 @@ dev = []
 aiusage = "aiusage:main"
 
 [tool.setuptools]
-py-modules = ["aiusage", "app", "workreport", "mcp_server", "mcp_http_server", "mcp_chatgpt_server"]
+py-modules = ["aiusage", "app", "workreport", "mcp_server", "mcp_http_server", "mcp_chatgpt_server", "report_prepare"]
