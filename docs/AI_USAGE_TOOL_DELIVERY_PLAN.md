@@ -601,24 +601,26 @@ save_technical_asset
 
 ### R11. ChatGPT Remote MCP 方案 B 第一版
 
-状态：DONE
+状态：VERIFYING
 
 目标：
 
-- 在不破坏现有 stdio MCP 的前提下，新增可通过 HTTPS tunnel 暴露给 ChatGPT 的 HTTP MCP Server。
+- 在不破坏现有 stdio MCP 的前提下，新增可通过 HTTPS tunnel 暴露给 ChatGPT 的标准 Streamable HTTP MCP Server。
 - 保持本地个人研发工作分析版定位，只读读取已有日报和趋势数据。
-- 增加 bearer token 访问控制，降低 tunnel 地址泄露后的数据读取风险。
+- 明确手写 HTTP JSON-RPC 调试入口不是 ChatGPT 最终接入链路。
 
 完成记录：
 
 ```text
-状态：DONE
-完成日期：2026-06-19
-提交：9867fe8 feat: add HTTP MCP server for ChatGPT remote access；本轮安全加固提交待回填
-验证：python -m py_compile aiusage.py app.py workreport.py mcp_server.py mcp_http_server.py tests\test_workreport.py tests\test_mcp_server.py tests\test_mcp_http_server.py
-验证：python -m unittest discover -s tests
-验证：HTTP smoke test 启动 python .\mcp_http_server.py --host 127.0.0.1 --port 8765，调用 GET /health、POST /mcp initialize、tools/list、tools/call get_daily_work_report，并验证无 token / 错 token / 正确 token 行为。
-备注：新增 mcp_http_server.py，复用 mcp_server.handle_request()、TOOLS、SERVER_NAME、SERVER_VERSION；POST /mcp 和 GET /health 均为 UTF-8 JSON 响应；token 从 AIUSAGE_MCP_TOKEN 读取；已加固为配置 token 后本机和 tunnel 转发请求都必须带正确 bearer token；未配置 token 时仅允许本机 smoke test；Remote HTTP MCP 忽略调用方 config，返回脱敏视图，远程工具 schema 不暴露 config 和原始 session_id，跨工具会话查询使用 session_ref；每个工具 outputSchema 已改为对应 structuredContent。当前未做 OAuth、固定域名、ChatGPT 端真实 connector 验证、MCP Inspector 验证、SSE/Streamable HTTP 和生产级 rate limit；不能声明已完整兼容 ChatGPT Remote MCP。
+状态：VERIFYING
+完成日期：2026-06-19；2026-06-20 补充标准 ChatGPT Streamable HTTP 入口
+提交：9867fe8 feat: add HTTP MCP server for ChatGPT remote access；44ffb15 fix: harden remote MCP security boundaries；22b5fdc fix: align MCP schemas and harden HTTP transport；本轮提交待回填
+验证：python -m py_compile aiusage.py app.py workreport.py mcp_server.py mcp_http_server.py mcp_chatgpt_server.py tests\test_workreport.py tests\test_mcp_server.py tests\test_mcp_http_server.py tests\test_mcp_chatgpt_server.py
+验证：python -m unittest discover -s tests -v
+验证：python .\mcp_chatgpt_server.py --help
+验证：python .\mcp_chatgpt_server.py --host 127.0.0.1 --port 8765 --config .\aiusage-config.json 返回缺少 MCP Python SDK 的明确错误提示。
+未验证：MCP SDK 安装失败，原因是当前环境 pip 访问 PyPI 代理握手超时，无法下载 setuptools / mcp；因此未能启动 Streamable HTTP server、未能执行 MCP Inspector、tunnel 和 ChatGPT Scan Tools。
+备注：新增 mcp_chatgpt_server.py，使用 MCP Python SDK Streamable HTTP transport 作为 ChatGPT 自定义 MCP 推荐入口；保留 mcp_http_server.py 仅作为手写 HTTP JSON-RPC 调试入口；mcp_server.py stdio 启动入口新增 --remote-safe --config，确保真实启动链路能启用 Remote-safe schema 和脱敏结果；ChatGPT 入口复用 handle_request(remote=True)，不暴露 config 和原始 session_id，使用 session_ref。当前未完成 ChatGPT 端真实 Scan Tools、工具调用、MCP Inspector、tunnel 验证；OAuth、固定域名、rate limit、工具级 allowlist 和访问日志仍属于后续生产化选项。
 ```
 
 ## 8. 推荐执行顺序

@@ -29,7 +29,7 @@ Codex / Claude Code 会话
   + 人工复盘
   -> daily-report.json / daily-report.md
   -> 周报、月报、趋势
-  -> 本地 stdio MCP / 实验性 HTTP MCP 只读查询
+  -> 本地 stdio MCP / ChatGPT Streamable HTTP MCP 只读查询
 ```
 
 ## 功能状态
@@ -40,16 +40,17 @@ Codex / Claude Code 会话
 | 历史趋势、周报、月报 | 可用 | 基于已生成日报聚合，不重新扫描原始记录 |
 | Streamlit Dashboard | 可用 | 本地看板查看日报和趋势 |
 | 本地 stdio MCP | 可用 | 给本机 MCP 客户端读取本地报告 |
-| HTTP MCP | 实验 | 自定义 HTTP JSON-RPC transport，已做本地测试，不是标准 Streamable HTTP MCP |
-| ChatGPT Remote MCP | 未完成端到端验证 | 仍需要 HTTPS tunnel 和 ChatGPT connector 真实验证 |
+| ChatGPT Streamable HTTP MCP | 已实现 / 待端到端验证 | `mcp_chatgpt_server.py`，用于 ChatGPT 自定义 MCP，通过 HTTPS tunnel 连接 |
+| HTTP JSON-RPC 调试入口 | 实验 | `mcp_http_server.py`，项目自定义 transport，不作为 ChatGPT 直连接入口 |
 
 ## 隐私和安全提示
 
 - 本工具默认读取和写入本机文件，不调用 OpenAI API，不上传云端。
 - `data/` 可能包含完整 AI 输入、本地路径、commit 信息和工作内容，不要提交到 Git。
 - `aiusage-config.json` 可能包含本地项目路径，不要提交到 Git。
-- Remote HTTP MCP 暴露的是私人研发数据。通过 tunnel 暴露前必须设置强 token。
-- HTTP MCP 会返回脱敏视图，但不等于可以公开暴露服务。
+- ChatGPT Streamable HTTP MCP 暴露的是私人研发数据。只在你主动启动本地服务和 tunnel 时使用，用完关闭。
+- 当前 ChatGPT 第一版建议使用开发模式的无认证只读 tunnel；生产或长期暴露需要 OAuth 2.1，本项目尚未实现 OAuth。
+- 不要把 tunnel 地址、token、`aiusage-config.json` 或 `data/` 提交到 Git。
 
 ## 快速开始
 
@@ -94,6 +95,12 @@ pip install tiktoken
 
 ```bash
 pip install -e ".[dashboard,tokens]"
+```
+
+如果要接入 ChatGPT 自定义 MCP，需要安装 MCP SDK 可选依赖：
+
+```bash
+pip install -e ".[chatgpt]"
 ```
 
 安装后可使用 CLI：
@@ -317,9 +324,63 @@ python .\mcp_server.py
 
 工具参数里的 `config` 可选，默认读取当前目录下的 `aiusage-config.json`。MCP Server 只读取配置中的 `data_dir` 和 `data/reports/` 下的本地报告；如果指定日期没有日报，会返回结构化错误和 warning。
 
-## HTTP MCP 实验版
+## ChatGPT 自定义 MCP 第一版
 
-ChatGPT 不能直接连接本地 `stdio` MCP，所以项目提供了一个实验性 HTTP MCP Server，用于后续通过 HTTPS tunnel 验证 Remote MCP。当前仓库只验证了本地 HTTP JSON-RPC 行为，尚未声明已通过 ChatGPT connector 或 MCP Inspector，也不声明已经完整实现标准 Streamable HTTP MCP。
+ChatGPT 不能直接连接本地 `stdio` MCP，也不能可靠使用本项目之前手写的 HTTP JSON-RPC 调试入口。ChatGPT 自定义 MCP 第一版使用 `mcp_chatgpt_server.py`，通过 MCP Python SDK 启动标准 Streamable HTTP endpoint。
+
+本地启动服务前先准备依赖：
+
+```powershell
+cd C:\Users\lenovo\Desktop\ai-usage-tool
+python -m pip install -e ".[chatgpt]"
+```
+
+默认 MCP 地址：
+
+```text
+http://127.0.0.1:8765/mcp
+```
+
+先启动 HTTPS tunnel，例如：
+
+```powershell
+cloudflared tunnel --url http://127.0.0.1:8765
+```
+
+或：
+
+```powershell
+ngrok http 8765
+```
+
+复制 tunnel hostname 后，再启动 MCP server。Python MCP SDK 有 DNS rebinding 保护，tunnel 场景需要允许该 host：
+
+```powershell
+$env:MCP_ALLOWED_HOSTS = "<tunnel-host>"
+$env:MCP_ALLOWED_ORIGINS = "https://<tunnel-host>"
+python .\mcp_chatgpt_server.py --host 127.0.0.1 --port 8765 --config .\aiusage-config.json
+```
+
+ChatGPT 创建自定义 MCP / App 时填写 tunnel 的 HTTPS `/mcp` 地址：
+
+```text
+https://<tunnel-host>/mcp
+```
+
+认证方式第一版选择无认证 / None，仅用于你本人主动启动的本地开发 tunnel。OpenAI 的 ChatGPT MCP 认证流程面向 OAuth 2.1；本项目的静态 `AIUSAGE_MCP_TOKEN` 只属于下方手写 HTTP 调试入口，不是 ChatGPT 自定义 MCP 的最终认证方案。
+
+`mcp_chatgpt_server.py` 的工具调用会强制走 Remote-safe 模式：
+
+- 不暴露 `config` 参数，ChatGPT 不能传入任意本地配置路径。
+- 使用启动参数 `--config` 指定的服务端配置。
+- 返回脱敏视图，不返回原始 `session_id`，跨工具查询使用 `session_ref`。
+- 只读读取已有日报和趋势，不上传云端、不生成新日报、不提交 Git、不删除数据。
+
+本仓库代码已经准备好本地启动和 tunnel 验证，但 ChatGPT 页面端 `Scan Tools` 和真实工具调用仍需要你在自己的 ChatGPT 账号中执行确认。
+
+## HTTP JSON-RPC 调试入口
+
+`mcp_http_server.py` 是项目自定义的 HTTP JSON-RPC 调试入口，不是标准 Streamable HTTP MCP，不作为 ChatGPT 自定义 MCP 的推荐接入方式。它保留用于本地 HTTP smoke test、token 鉴权和 Remote-safe 数据边界回归测试。
 
 本地启动：
 
@@ -342,15 +403,9 @@ Authorization: Bearer <local-random-token>
 
 未配置 `AIUSAGE_MCP_TOKEN` 时，只允许本机无 token 访问，方便本地 smoke test。只要配置了 token，所有 `/mcp` 请求都必须携带正确 bearer token，包括 tunnel 转发后看起来来自 `127.0.0.1` 的请求。不要把 token 写入代码、README、测试数据或提交记录。
 
-后续 ChatGPT 侧预计需要填写 HTTPS tunnel 的 `/mcp` 地址，例如：
+当前 HTTP JSON-RPC 调试入口仍然只读：不上传云端、不自动提交 Git、不删除报告、不新增写入型工具、不自动扫描 ChatGPT 聊天记录。HTTP 响应默认会移除本地路径、完整 AI 输入、邮箱、完整 session ID 和完整 hash 等远程不必要字段。
 
-```text
-https://<tunnel-host>/mcp
-```
-
-可使用 Cloudflare Tunnel、ngrok 或其他 HTTPS tunnel 把 `http://127.0.0.1:8765` 暴露出去。当前 HTTP MCP 仍然只读：不上传云端、不自动提交 Git、不删除报告、不新增写入型工具、不自动扫描 ChatGPT 聊天记录。HTTP 响应默认会移除本地路径、完整 AI 输入、邮箱、完整 session ID 和完整 hash 等远程不必要字段。
-
-HTTP MCP 与本地 stdio MCP 的差异：
+HTTP JSON-RPC 调试入口与本地 stdio MCP 的差异：
 
 - stdio MCP 可使用 `config` 参数读取指定本地配置。
 - HTTP MCP 的工具列表不会暴露 `config` 参数，远程调用方不能选择服务端配置文件。

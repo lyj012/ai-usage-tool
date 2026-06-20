@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import argparse
 from copy import deepcopy
 from datetime import date
 from hashlib import sha256
@@ -613,7 +614,7 @@ def error_response(request_id: Any, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
-def serve_stdio() -> int:
+def serve_stdio(*, remote: bool = False, remote_config: str | None = None) -> int:
     configure_stdio()
     for line in sys.stdin:
         line = line.strip()
@@ -623,7 +624,7 @@ def serve_stdio() -> int:
             request = json.loads(line)
             if not isinstance(request, dict):
                 raise ValueError("Request must be an object")
-            result = handle_request(request)
+            result = handle_request(request, remote=remote, remote_config=remote_config)
         except Exception as exc:
             result = error_response(None, -32700, f"Parse error: {exc}")
         if result is not None:
@@ -631,5 +632,13 @@ def serve_stdio() -> int:
     return 0
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run AI Usage Tool stdio MCP server.")
+    parser.add_argument("--remote-safe", action="store_true", help="Use Remote-safe schemas and sanitized tool results.")
+    parser.add_argument("--config", default="aiusage-config.json", help="Server-controlled config path used with --remote-safe.")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    raise SystemExit(serve_stdio())
+    args = parse_args()
+    raise SystemExit(serve_stdio(remote=args.remote_safe, remote_config=args.config))

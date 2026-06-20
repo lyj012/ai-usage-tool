@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -181,6 +183,37 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(result["jsonrpc"], "2.0")
         self.assertEqual(result["id"], 1)
         self.assertIn("tools", result["result"])
+
+    def test_stdio_remote_safe_startup_uses_remote_schema(self):
+        process = subprocess.Popen(
+            [sys.executable, "mcp_server.py", "--remote-safe", "--config", str(self.config)],
+            cwd=Path(__file__).resolve().parents[1],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+        )
+        try:
+            request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+            assert process.stdin is not None
+            process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+            process.stdin.flush()
+            assert process.stdout is not None
+            line = process.stdout.readline()
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
+            for pipe in (process.stdin, process.stdout, process.stderr):
+                if pipe is not None:
+                    pipe.close()
+        payload = json.loads(line)
+        tools = payload["result"]["tools"]
+        for tool in tools:
+            self.assertNotIn("config", tool["inputSchema"]["properties"])
+        session_tool = next(tool for tool in tools if tool["name"] == "get_ai_session_details")
+        self.assertNotIn("session_id", session_tool["inputSchema"]["properties"])
+        self.assertIn("session_ref", session_tool["inputSchema"]["properties"])
 
     def test_tool_outputs_match_output_schema_and_content(self):
         calls = [

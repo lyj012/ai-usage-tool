@@ -106,8 +106,8 @@ ChatGPT
 
 目标：
 
-- 在不破坏现有 stdio MCP 的前提下，新增 HTTP MCP transport。
-- 路径建议：`POST /mcp`。
+- 在不破坏现有 stdio MCP 的前提下，新增 Remote-safe MCP HTTP 能力。
+- ChatGPT 最终接入必须使用标准 Streamable HTTP MCP endpoint。
 - 复用现有工具定义和 handler。
 - 保持只读。
 
@@ -126,11 +126,11 @@ ChatGPT
 
 技术选择：
 
-- 优先标准库 `http.server` 做最小 HTTP JSON-RPC。
-- 如 ChatGPT 需要 Streamable HTTP 细节，再引入成熟 MCP SDK 或轻量 ASGI 框架。
+- `mcp_chatgpt_server.py` 使用 MCP Python SDK 的 Streamable HTTP transport，作为 ChatGPT 自定义 MCP 的推荐入口。
+- `mcp_http_server.py` 使用标准库 `http.server`，只保留为本地 HTTP JSON-RPC 调试入口和 Remote-safe 边界测试，不再声明可直接接入 ChatGPT。
 - 第一版不引入数据库、不引入后台任务、不引入云服务 SDK。
 
-验收：
+本地 HTTP JSON-RPC 调试验收：
 
 - `python mcp_http_server.py --host 127.0.0.1 --port 8765`
 - `POST http://127.0.0.1:8765/mcp` 可完成：
@@ -138,6 +138,14 @@ ChatGPT
   - `tools/list`
   - `tools/call get_daily_work_report`
   - 缺失日期返回结构化错误
+
+ChatGPT Streamable HTTP 验收：
+
+- `python -m pip install -e ".[chatgpt]"`
+- `python .\mcp_chatgpt_server.py --host 127.0.0.1 --port 8765 --config .\aiusage-config.json`
+- tunnel 暴露 `http://127.0.0.1:8765`
+- ChatGPT connector 填入 `https://<tunnel-host>/mcp`
+- ChatGPT `Scan Tools` 能扫描出工具并调用日报、趋势工具。
 
 ### 6.2 阶段 B2：本地访问控制
 
@@ -162,6 +170,12 @@ Authorization: Bearer <token>
 - 未配置 token 时，默认只允许本机访问。
 - 一旦配置 token，所有 `/mcp` 请求都必须带正确 token，包括经 tunnel 转发后看起来来自 `127.0.0.1` 的请求。
 
+说明：
+
+- 上述 bearer token 只适用于 `mcp_http_server.py` 这个本地调试入口。
+- ChatGPT 自定义 MCP 的长期认证路径是 OAuth 2.1；静态 `AIUSAGE_MCP_TOKEN` 不能作为 ChatGPT 生产认证方案。
+- 当前 `mcp_chatgpt_server.py` 第一版建议只用于用户本人主动启动的本地开发 tunnel，认证方式选择无认证 / None。
+
 验收：
 
 - 无 token 请求返回 401。
@@ -183,11 +197,10 @@ Authorization: Bearer <token>
 
 建议先用临时 tunnel 验证，不急着固定域名。
 
-示例流程：
+ChatGPT Streamable HTTP 示例流程：
 
 ```powershell
-$env:AIUSAGE_MCP_TOKEN = "<local-random-token>"
-python .\mcp_http_server.py --host 127.0.0.1 --port 8765
+python -m pip install -e ".[chatgpt]"
 ```
 
 另一个终端启动 tunnel：
@@ -196,13 +209,21 @@ python .\mcp_http_server.py --host 127.0.0.1 --port 8765
 cloudflared tunnel --url http://127.0.0.1:8765
 ```
 
+复制 tunnel hostname 后启动 MCP server：
+
+```powershell
+$env:MCP_ALLOWED_HOSTS = "<tunnel-host>"
+$env:MCP_ALLOWED_ORIGINS = "https://<tunnel-host>"
+python .\mcp_chatgpt_server.py --host 127.0.0.1 --port 8765 --config .\aiusage-config.json
+```
+
 ChatGPT connector 填：
 
 ```text
 https://<tunnel-host>/mcp
 ```
 
-如 ChatGPT connector 支持 bearer token 配置，则填入同一个 token。
+ChatGPT connector 第一版认证选择无认证 / None。若要长期或公开暴露，必须补 OAuth 2.1 后再使用。
 
 验收：
 
@@ -257,16 +278,9 @@ https://<tunnel-host>/mcp
 ```text
 POST /mcp
 Content-Type: application/json
-Authorization: Bearer <token>
 ```
 
-请求体沿用 JSON-RPC：
-
-```json
-{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
-```
-
-响应沿用现有 `handle_request()` 输出。
+ChatGPT 推荐入口由 MCP SDK 的 Streamable HTTP transport 管理请求、响应和会话行为。本项目工具执行层仍复用 `mcp_server.handle_request(remote=True)`。
 
 ### 7.2 健康检查
 
@@ -394,10 +408,15 @@ ChatGPT 验证：
 
 状态：HARDENED / 未完成 ChatGPT 端到端验证
 
-完成日期：2026-06-19
+完成日期：2026-06-19；2026-06-20 补充 ChatGPT Streamable HTTP 入口
 
 已实现：
 
+- 新增 `mcp_chatgpt_server.py`，使用 MCP Python SDK Streamable HTTP transport，作为 ChatGPT 自定义 MCP 推荐入口。
+- `mcp_chatgpt_server.py` 复用 `mcp_server.handle_request(remote=True)`，不复制日报、趋势或搜索业务逻辑。
+- ChatGPT 入口通过 `--config` 使用服务端固定配置，不暴露调用方 `config` 参数。
+- ChatGPT 入口返回 Remote-safe 脱敏结果，不暴露原始 `session_id`，使用 `session_ref`。
+- `mcp_server.py` stdio 启动入口新增 `--remote-safe --config`，真实启动链路可以启用 Remote-safe schema 和脱敏结果。
 - 新增 `mcp_http_server.py`，独立于 `mcp_server.py` 的 stdio transport。
 - `GET /health` 只返回 `status: ok`，不返回版本、工具数量或日报数据。
 - `POST /mcp` 接收 JSON-RPC 请求并复用 `mcp_server.handle_request(remote=True)`。
@@ -412,12 +431,12 @@ ChatGPT 验证：
 - 每个 MCP 工具的 `outputSchema` 描述各自的 `structuredContent`，而不是整个 ToolResult 包装结构。
 - HTTP 响应统一 `application/json; charset=utf-8`。
 - 单元测试覆盖 initialize、tools/list、tools/call get_daily_work_report、缺失日期结构化错误、无 token、错 token、正确 token 和 localhost 无 token。
-- README 已补充 ChatGPT Remote MCP 第一版启动、tunnel、token 和只读边界说明。
+- README 已补充 ChatGPT Streamable HTTP MCP 第一版启动、tunnel、认证限制和只读边界说明。
 
 验证：
 
 ```powershell
-python -m py_compile aiusage.py app.py workreport.py mcp_server.py mcp_http_server.py tests\test_workreport.py tests\test_mcp_server.py tests\test_mcp_http_server.py
+python -m py_compile aiusage.py app.py workreport.py mcp_server.py mcp_http_server.py mcp_chatgpt_server.py tests\test_workreport.py tests\test_mcp_server.py tests\test_mcp_http_server.py tests\test_mcp_chatgpt_server.py
 python -m unittest discover -s tests
 ```
 
@@ -440,13 +459,16 @@ python .\mcp_http_server.py --host 127.0.0.1 --port 8765
 
 真实状态和剩余项：
 
+- 本地自动化测试已执行：`python -m py_compile aiusage.py app.py workreport.py mcp_server.py mcp_http_server.py mcp_chatgpt_server.py tests\test_workreport.py tests\test_mcp_server.py tests\test_mcp_http_server.py tests\test_mcp_chatgpt_server.py`。
+- 本地自动化测试已执行：`python -m unittest discover -s tests -v`。
+- `python .\mcp_chatgpt_server.py --help` 已确认启动参数存在。
+- 本地环境尝试安装 MCP SDK 可选依赖失败，原因是 pip 访问 PyPI 代理握手超时，无法下载 `setuptools` / `mcp`；未完成 `mcp_chatgpt_server.py` 实际启动验证。
 - 真实 HTTPS tunnel 验证。
 - ChatGPT developer mode connector 实测。
 - MCP Inspector 或其他标准 Remote MCP 客户端验证。
-- 如 ChatGPT 对 Remote MCP transport 有更严格协议要求，再按实测结果调整。
 - OAuth、固定域名、rate limit、工具级 allowlist 和访问日志仍属于后续生产化选项。
-- 当前 HTTP server 是本项目的受限 HTTP JSON-RPC transport，不应文档化为“已完整兼容 ChatGPT Remote MCP”。
-- 当前没有实现 initialize 会话状态机、SSE 或标准 Streamable HTTP transport；需要 MCP Inspector / ChatGPT connector 真实验证后再更新兼容性结论。
+- `mcp_http_server.py` 是本项目的受限 HTTP JSON-RPC transport，不应文档化为“已完整兼容 ChatGPT Remote MCP”。
+- `mcp_chatgpt_server.py` 已切到标准 Streamable HTTP transport，但需要 MCP Inspector / ChatGPT connector 真实验证后再更新兼容性结论。
 
 ## 14. 待确认问题
 

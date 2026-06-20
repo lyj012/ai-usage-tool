@@ -18,10 +18,13 @@ dashboard = [
 tokens = [
   "tiktoken>=0.7",
 ]
+chatgpt = [
+  "mcp[cli]>=1.28,<2",
+]
 dev = []
 
 [project.scripts]
 aiusage = "aiusage:main"
 
 [tool.setuptools]
-py-modules = ["aiusage", "app", "workreport", "mcp_server", "mcp_http_server"]
+py-modules = ["aiusage", "app", "workreport", "mcp_server", "mcp_http_server", "mcp_chatgpt_server"]
