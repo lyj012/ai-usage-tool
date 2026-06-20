@@ -320,6 +320,10 @@ def should_refresh_report(
         age = datetime.now(timezone.utc).timestamp() - report_path.stat().st_mtime
         if age > CURRENT_DAY_CACHE_TTL_SECONDS:
             return True, "current_day_ttl"
+    else:
+        # Source session files can keep changing while today's Codex session is active.
+        # Do not let current log mtimes repeatedly invalidate already-generated history.
+        return False, "historical_cache_valid"
     if not meta:
         if float(fingerprint.get("source_max_mtime") or 0) > report_path.stat().st_mtime:
             return True, "source_newer_than_legacy_report"

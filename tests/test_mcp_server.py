@@ -518,12 +518,12 @@ class McpAutoPrepareTest(unittest.TestCase):
         self.assertEqual(second["structuredContent"]["data_freshness"]["source"], "cache")
 
     def test_source_mtime_refreshes_report(self):
-        source = self.write_codex_turn(day="2026-06-19", text="first mcp task")
-        first = mcp_server.get_daily_work_report({"date": "2026-06-19", "config": str(self.config)})
+        source = self.write_codex_turn(day="2026-06-20", text="first mcp task")
+        first = mcp_server.get_daily_work_report({"date": "2026-06-20", "config": str(self.config)})
         self.assertFalse(first["isError"])
         time.sleep(1.1)
         source.write_text(source.read_text(encoding="utf-8").replace("first mcp task", "second mcp task"), encoding="utf-8")
-        refreshed = mcp_server.get_daily_work_report({"date": "2026-06-19", "config": str(self.config)})
+        refreshed = mcp_server.get_daily_work_report({"date": "2026-06-20", "config": str(self.config)})
         self.assertFalse(refreshed["isError"])
         self.assertEqual(refreshed["structuredContent"]["data_freshness"]["source"], "refreshed")
 
